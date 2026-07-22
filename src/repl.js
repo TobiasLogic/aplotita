@@ -17,6 +17,7 @@ import {
 import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { unifiedDiff, diffForEdit, diffForLineEdit } from './diff.js';
 import { resolveMentions } from './context.js';
+import { createPasteState, feedPasteKey, insertPaste } from './paste.js';
 import { fetchModels, formatModelList } from './models.js';
 import { listSessions, saveSession, loadSession, deleteSession, sessionExists } from './sessions.js';
 import { PROVIDERS, getProvider, getProviderChoices } from './providers.js';
@@ -460,6 +461,7 @@ function printSessionStats() {
 }
 
 async function goodbye() {
+  if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
   printSessionStats();
   cleanupMcpServers();
   getIndexer()?.close();
@@ -632,6 +634,7 @@ export async function start(userOpts = {}) {
 
   process.on('SIGINT', async () => {
     if (isStreaming) return;
+    if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
     printSessionStats();
     cleanupMcpServers();
     if (indexer) indexer.close();
@@ -1002,6 +1005,8 @@ export async function start(userOpts = {}) {
     process.exit(1);
   }
 
+  if (process.stdout.isTTY) process.stdout.write('\x1b[?2004h');
+
   while (true) {
     messages[0].content = getSystemPrompt();
 
@@ -1023,6 +1028,29 @@ export async function start(userOpts = {}) {
         currentMode = modes[(idx + 1) % modes.length];
       }
     });
+
+    const pasteState = createPasteState();
+    let pasteAnchor = { line: '', cursor: 0 };
+    const baseOnKeypress = inputPrompt.onKeypress;
+    inputPrompt.onKeypress = (str, key) => {
+      const ev = feedPasteKey(pasteState, str, key);
+      if (ev.type === 'start') {
+        const rl = inputPrompt.rl;
+        pasteAnchor = { line: rl?.line ?? '', cursor: rl?.cursor ?? 0 };
+        return;
+      }
+      if (ev.type === 'accumulate') return;
+      if (ev.type === 'end') {
+        const rl = inputPrompt.rl;
+        const { line, cursor } = insertPaste(pasteAnchor.line, pasteAnchor.cursor, ev.text);
+        if (rl) { rl.line = line; rl.cursor = cursor; }
+        inputPrompt.value = line.replace(/\t/g, '');
+        inputPrompt._cursor = cursor;
+        inputPrompt.render();
+        return;
+      }
+      return baseOnKeypress(str, key);
+    };
 
     const input = await inputPrompt.prompt();
 
