@@ -10,10 +10,14 @@ import { VexraIndexer } from './indexer/index.js';
 import { setIndexer, getIndexer } from './indexer/instance.js';
 import { getProjectConfigOverrides, getSystemPrompt, buildInitialMessages, warnMentions } from './prompt.js';
 import { loadHistory } from './history.js';
-import { printBanner, printSessionStats, printWordmark, promptLine } from './render.js';
+import { promptLine, printSessionStats, printWordmark } from './render.js';
 import { runProviderSetup } from './setup.js';
 import { createSession } from './session.js';
 import { dispatchCommand } from './commands.js';
+import { createStdoutController } from './ui/stdout-adapter.js';
+import { createInkController } from './ui/controller.js';
+import { mountInkApp } from './ui/app.js';
+import { setToolUI } from './tools.js';
 
 export { recentUserText } from './prompt.js';
 
@@ -33,6 +37,8 @@ export async function start(userOpts = {}) {
 
   validateConfig(opts);
 
+  const interactive = !opts.headless && process.stdin.isTTY && process.stdout.isTTY;
+
   const ctx = {
     opts,
     messages: buildInitialMessages('build'),
@@ -46,9 +52,14 @@ export async function start(userOpts = {}) {
     loaderStyle: 'braille',
     stats: { tokenUsage: { prompt: 0, completion: 0, total: 0 }, startTime: Date.now(), messageCount: 0 },
   };
+  ctx.ui = interactive ? createInkController() : createStdoutController(ctx);
+  setToolUI(ctx.ui);
   Object.assign(ctx, createSession(ctx));
 
+  let inkApp = null;
+
   async function goodbye() {
+    if (inkApp) { inkApp.finish(); inkApp.unmount(); inkApp = null; }
     if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
     printSessionStats(ctx.stats);
     console.log();
@@ -61,27 +72,61 @@ export async function start(userOpts = {}) {
   }
   ctx.goodbye = goodbye;
 
-  process.on('SIGINT', async () => {
-    if (ctx.isStreaming) return;
-    if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
-    printSessionStats(ctx.stats);
-    cleanupMcpServers();
-    if (ctx.indexer) ctx.indexer.close();
-    process.stdout.write('\x1b[?25h');
-    process.exit(0);
-  });
+  async function handleSubmit(input) {
+    ctx.messages[0].content = getSystemPrompt(ctx.mode);
+    const trimmed = (input || '').trim();
+    if (!trimmed) return;
 
-  await printBanner(opts);
-  if (legacyConfigMigrated && !opts.headless) {
-    p.log.warn(`Migrated your settings from ${legacyConfigSource} to ~/.aplotita. The old directory was left in place and can be deleted once everything looks right.`);
+    if (trimmed.startsWith('/')) {
+      const space = trimmed.indexOf(' ');
+      const cmdName = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).toLowerCase();
+      const arg = space === -1 ? '' : trimmed.slice(space + 1).trim();
+      await dispatchCommand(ctx, cmdName, arg);
+      return;
+    }
+
+    ctx.lastUserPromptIdx = ctx.messages.length;
+    ctx.stats.messageCount++;
+    const { text: cleanText, context, images, warnings } = resolveMentions(trimmed, { model: opts.model });
+    warnMentions(warnings, ctx.ui);
+    ctx.ui.userMessage(cleanText);
+
+    let messageContent;
+    if (images && images.length > 0) {
+      messageContent = [{ type: 'text', text: cleanText + context }, ...images];
+    } else {
+      messageContent = cleanText + context;
+    }
+
+    ctx.messages.push({ role: 'user', content: messageContent });
+    await ctx.agentLoop({ truncateOnError: ctx.lastUserPromptIdx });
   }
-  await initMcpServers(p);
+
+  if (interactive) {
+    inkApp = mountInkApp(ctx, { onSubmit: handleSubmit, onExit: goodbye });
+  } else {
+    process.on('SIGINT', async () => {
+      if (ctx.isStreaming) return;
+      if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
+      printSessionStats(ctx.stats);
+      cleanupMcpServers();
+      if (ctx.indexer) ctx.indexer.close();
+      process.stdout.write('\x1b[?25h');
+      process.exit(0);
+    });
+  }
+
+  await ctx.ui.banner(opts);
+  if (legacyConfigMigrated && !opts.headless) {
+    ctx.ui.log('warn', `Migrated your settings from ${legacyConfigSource} to ~/.aplotita. The old directory was left in place and can be deleted once everything looks right.`);
+  }
+  await initMcpServers(ctx.ui);
 
   if (config.indexer?.enabled && !opts.headless) {
     try {
       ctx.indexer = new VexraIndexer({
         root: process.cwd(),
-        log: (m) => { if (!ctx.isStreaming) p.log.message(chalk.dim(m)); },
+        log: (m) => { if (!ctx.isStreaming) ctx.ui.log('message', chalk.dim(m)); },
       }).init();
       setIndexer(ctx.indexer);
       ctx.indexer.startWatch();
@@ -89,7 +134,7 @@ export async function start(userOpts = {}) {
         .then((stats) => {
           if (ctx.isStreaming) return;
           const mode = stats.vecEnabled && stats.embedded ? 'semantic' : 'keyword';
-          p.log.message(chalk.dim(`index ready · ${stats.files} files · ${stats.chunks} chunks · ${mode} search`));
+          ctx.ui.log('message', chalk.dim(`index ready · ${stats.files} files · ${stats.chunks} chunks · ${mode} search`));
         })
         .catch(() => {});
     } catch {
@@ -101,18 +146,19 @@ export async function start(userOpts = {}) {
     const loaded = loadHistory();
     if (loaded && loaded.length > 1) {
       ctx.messages = loaded;
-      p.log.success(`Resumed previous session (${loaded.length - 1} message(s)).`);
+      ctx.ui.log('success', `Resumed previous session (${loaded.length - 1} message(s)).`);
     } else {
-      p.log.warn('No previous session to resume - starting fresh.');
+      ctx.ui.log('warn', 'No previous session to resume - starting fresh.');
     }
   }
 
   if (initialPrompt) {
     ctx.messages[0].content = getSystemPrompt(ctx.mode);
     const { text, context, images, warnings } = resolveMentions(initialPrompt, { model: opts.model });
-    warnMentions(warnings);
+    warnMentions(warnings, ctx.ui);
     const userMsg = { role: 'user', content: context ? `${text}\n${context}` : text };
     if (images.length > 0) userMsg.content = [{ type: 'text', text: userMsg.content }, ...images];
+    ctx.ui.userMessage(text);
     ctx.messages.push(userMsg);
     await ctx.agentLoop({ truncateOnError: ctx.messages.length - 1 });
     if (opts.headless) {
@@ -125,6 +171,11 @@ export async function start(userOpts = {}) {
   if (opts.headless) {
     console.error('Error: Headless mode requires an initial prompt.');
     process.exit(1);
+  }
+
+  if (interactive) {
+    await inkApp.done;
+    return;
   }
 
   if (process.stdout.isTTY) process.stdout.write('\x1b[?2004h');
@@ -174,33 +225,6 @@ export async function start(userOpts = {}) {
 
     if (p.isCancel(input)) await goodbye();
 
-    const trimmed = (input || '').trim();
-    if (!trimmed) continue;
-
-    if (trimmed.startsWith('/')) {
-      const space = trimmed.indexOf(' ');
-      const name = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).toLowerCase();
-      const arg = space === -1 ? '' : trimmed.slice(space + 1).trim();
-      await dispatchCommand(ctx, name, arg);
-      continue;
-    }
-
-    ctx.lastUserPromptIdx = ctx.messages.length;
-    ctx.stats.messageCount++;
-    const { text: cleanText, context, images, warnings } = resolveMentions(trimmed, { model: opts.model });
-    warnMentions(warnings);
-
-    let messageContent;
-    if (images && images.length > 0) {
-      messageContent = [
-        { type: 'text', text: cleanText + context },
-        ...images
-      ];
-    } else {
-      messageContent = cleanText + context;
-    }
-
-    ctx.messages.push({ role: 'user', content: messageContent });
-    await ctx.agentLoop({ truncateOnError: ctx.lastUserPromptIdx });
+    await handleSubmit(input);
   }
 }

@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import chalk from 'chalk';
 import { spawn } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync } from 'fs';
@@ -10,7 +9,7 @@ import { fetchModels } from './models.js';
 import { listSessions, saveSession, loadSession, deleteSession } from './sessions.js';
 import { getSystemPrompt, buildInitialMessages, warnMentions } from './prompt.js';
 import { saveHistory, loadHistory, HISTORY_FILE } from './history.js';
-import { printHelp, printBanner, createLoader, LOADER_STYLES, exportMarkdown } from './render.js';
+import { createLoader, LOADER_STYLES, exportMarkdown } from './render.js';
 import {
   createSpinner, createShimmer, createPulse, createGradientBar, createParticles, createMatrix,
   typewriter, fadeTransition, progressBar, animateCountUp,
@@ -18,14 +17,15 @@ import {
 
 export async function dispatchCommand(ctx, name, arg) {
   const { opts } = ctx;
+  const ui = ctx.ui;
 
   switch (name) {
     case 'help':
-      printHelp();
+      ui.help();
       break;
 
     case 'provider':
-      await runProviderSetup(opts);
+      await ui.suspend(() => runProviderSetup(opts));
       break;
 
     case 'exit':
@@ -34,41 +34,41 @@ export async function dispatchCommand(ctx, name, arg) {
       break;
 
     case 'clear':
-      console.clear();
-      await printBanner(opts);
+      ui.clear();
+      await ui.banner(opts);
       break;
 
     case 'mode': {
       if (!arg) {
-        p.log.info(`Current mode: ${ctx.mode}`);
-        console.log(chalk.dim('  Available modes: build, architect, ask'));
+        ui.log('info', `Current mode: ${ctx.mode}`);
+        ui.note(chalk.dim('  Available modes: build, architect, ask'));
         break;
       }
       if (['build', 'architect', 'ask'].includes(arg)) {
         ctx.mode = arg;
-        p.log.success(`Mode changed to: ${chalk.bold(arg)}`);
+        ui.log('success', `Mode changed to: ${chalk.bold(arg)}`);
       } else {
-        p.log.warn(`Unknown mode: ${arg}. Available: build, architect, ask`);
+        ui.log('warn', `Unknown mode: ${arg}. Available: build, architect, ask`);
       }
       break;
     }
 
     case 'auto': {
       if (!arg) {
-        p.log.warn('Usage: /auto <task description>');
+        ui.log('warn', 'Usage: /auto <task description>');
         break;
       }
       const prevHeadless = opts.headless;
       opts.headless = true;
       ctx.messages[0].content = getSystemPrompt(ctx.mode);
       const { text, context, images, warnings } = resolveMentions(arg, { model: opts.model });
-      warnMentions(warnings);
+      warnMentions(warnings, ui);
       const userMsg = { role: 'user', content: context ? `${text}\n${context}` : text };
       if (images.length > 0) userMsg.content = [{ type: 'text', text: userMsg.content }, ...images];
       ctx.messages.push(userMsg);
       await ctx.agentLoop({ truncateOnError: ctx.messages.length - 1, maxLoops: 100 });
       opts.headless = prevHeadless;
-      p.log.success('Auto task completed.');
+      ui.log('success', 'Auto task completed.');
       break;
     }
 
@@ -81,7 +81,7 @@ export async function dispatchCommand(ctx, name, arg) {
       ctx.stats.messageCount = 0;
       ctx.stats.startTime = Date.now();
       saveHistory(ctx.messages);
-      p.log.success('Conversation reset.');
+      ui.log('success', 'Conversation reset.');
       break;
 
     case 'compact': {
@@ -89,9 +89,9 @@ export async function dispatchCommand(ctx, name, arg) {
       const result = await ctx.runCompaction({ force: true });
       if (result.compacted) {
         saveHistory(ctx.messages);
-        p.log.success(`Compacted conversation: ~${before} → ~${result.tokens} tokens.`);
+        ui.log('success', `Compacted conversation: ~${before} → ~${result.tokens} tokens.`);
       } else {
-        p.log.info('Nothing to compact yet.');
+        ui.log('info', 'Nothing to compact yet.');
       }
       break;
     }
@@ -101,91 +101,89 @@ export async function dispatchCommand(ctx, name, arg) {
       if (loaded && loaded.length > 1) {
         ctx.messages = loaded;
         ctx.lastUserPromptIdx = null;
-        p.log.success(`Loaded ${loaded.length - 1} message(s) from the previous session.`);
+        ui.log('success', `Loaded ${loaded.length - 1} message(s) from the previous session.`);
       } else {
-        p.log.warn('No previous session to resume.');
+        ui.log('warn', 'No previous session to resume.');
       }
       break;
     }
 
     case 'model':
-      if (!arg) p.log.info(`Model: ${opts.model}`);
+      if (!arg) ui.log('info', `Model: ${opts.model}`);
       else {
         opts.model = arg;
-        p.log.success(`Model → ${chalk.bold.hex('#36D0D0')(arg)}`);
-        console.log(chalk.dim(`  (next response will use ${arg})`));
+        ui.log('success', `Model → ${chalk.bold.hex('#36D0D0')(arg)}`);
+        ui.note(chalk.dim(`  (next response will use ${arg})`));
       }
       break;
 
     case 'models': {
-      const spinner = createSpinner('Fetching models...', { style: 'dots', color: [180, 100, 255] });
-      spinner.start();
+      ui.setStatus('Fetching models');
       try {
         const models = await fetchModels(opts.baseUrl, opts.apiKey);
-        spinner.stop();
+        ui.setStatus(null);
         if (models.length === 0) {
-          p.log.warn('No models returned.');
+          ui.log('warn', 'No models returned.');
           break;
         }
-        const choices = models.slice(0, 50).map(m => ({
+        const options = models.slice(0, 50).map(m => ({
           value: m.id,
           label: m.id,
           hint: m.contextLength ? `${(m.contextLength / 1000).toFixed(0)}k ctx` : '',
         }));
-        const selected = await p.select({
-          message: 'Select a model',
-          options: choices,
-        });
-        if (p.isCancel(selected)) break;
+        const selected = await ui.requestSelect({ message: 'Select a model', options });
+        if (selected == null) break;
         opts.model = selected;
-        p.log.success(`Model → ${chalk.bold.hex('#36D0D0')(selected)}`);
-        console.log(chalk.dim(`  (next response will use ${selected})`));
+        ui.log('success', `Model → ${chalk.bold.hex('#36D0D0')(selected)}`);
+        ui.note(chalk.dim(`  (next response will use ${selected})`));
       } catch (err) {
-        spinner.stop();
-        p.log.error(`Failed to fetch models: ${err.message}`);
+        ui.setStatus(null);
+        ui.log('error', `Failed to fetch models: ${err.message}`);
       }
       break;
     }
 
     case 'temp':
     case 'temperature': {
-      if (!arg) { p.log.info(`Temperature: ${opts.temperature}`); break; }
+      if (!arg) { ui.log('info', `Temperature: ${opts.temperature}`); break; }
       const n = Number(arg);
-      if (isNaN(n) || n < 0 || n > 2) { p.log.warn('Temperature must be between 0 and 2.'); break; }
+      if (isNaN(n) || n < 0 || n > 2) { ui.log('warn', 'Temperature must be between 0 and 2.'); break; }
       opts.temperature = n;
-      p.log.success(`Temperature set to ${n}`);
+      ui.log('success', `Temperature set to ${n}`);
       break;
     }
 
     case 'tokens':
     case 'maxtokens': {
-      if (!arg) { p.log.info(`Max tokens: ${opts.maxTokens}`); break; }
+      if (!arg) { ui.log('info', `Max tokens: ${opts.maxTokens}`); break; }
       const n = parseInt(arg, 10);
-      if (isNaN(n) || n < 1) { p.log.warn('Max tokens must be a positive integer.'); break; }
+      if (isNaN(n) || n < 1) { ui.log('warn', 'Max tokens must be a positive integer.'); break; }
       opts.maxTokens = n;
-      p.log.success(`Max tokens set to ${n}`);
+      ui.log('success', `Max tokens set to ${n}`);
       break;
     }
 
     case 'loader': {
       if (!arg) {
-        p.log.info(`Loader: ${chalk.bold.hex('#36D0D0')(ctx.loaderStyle)}`);
-        console.log(chalk.dim(`  Available: ${LOADER_STYLES.join(', ')}`));
+        ui.log('info', `Loader: ${chalk.bold.hex('#36D0D0')(ctx.loaderStyle)}`);
+        ui.note(chalk.dim(`  Available: ${LOADER_STYLES.join(', ')}`));
         break;
       }
       const style = arg.toLowerCase();
       if (!LOADER_STYLES.includes(style)) {
-        p.log.warn(`Unknown loader style: ${style}`);
-        console.log(chalk.dim(`  Available: ${LOADER_STYLES.join(', ')}`));
+        ui.log('warn', `Unknown loader style: ${style}`);
+        ui.note(chalk.dim(`  Available: ${LOADER_STYLES.join(', ')}`));
         break;
       }
       ctx.loaderStyle = style;
-      p.log.success(`Loader set to ${chalk.bold.hex('#36D0D0')(style)}`);
-      const preview = createLoader('Preview', style);
-      preview.start();
-      await new Promise(r => setTimeout(r, 2000));
-      preview.stop();
-      console.log();
+      ui.log('success', `Loader set to ${chalk.bold.hex('#36D0D0')(style)}`);
+      if (!ui.isInk) {
+        const preview = createLoader('Preview', style);
+        preview.start();
+        await new Promise(r => setTimeout(r, 2000));
+        preview.stop();
+        console.log();
+      }
       break;
     }
 
@@ -193,30 +191,30 @@ export async function dispatchCommand(ctx, name, arg) {
       const file = arg || `ai-cli-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
       try {
         exportMarkdown(ctx.messages, file);
-        p.log.success(`Saved conversation to ${file}`);
+        ui.log('success', `Saved conversation to ${file}`);
       } catch (err) {
-        p.log.error(`Failed to save: ${err.message}`);
+        ui.log('error', `Failed to save: ${err.message}`);
       }
       break;
     }
 
     case 'history': {
       const count = ctx.messages.filter(m => m.role !== 'system').length;
-      p.log.info(`${count} message(s) in context. Autosaved to ${HISTORY_FILE}`);
+      ui.log('info', `${count} message(s) in context. Autosaved to ${HISTORY_FILE}`);
       const window = ctx.resolveContextWindow();
       const current = ctx.currentContextTokens();
       const pct = window > 0 ? Math.round((current / window) * 100) : 0;
       const source = ctx.lastPromptTokens != null ? 'measured' : 'estimated';
-      console.log(chalk.dim(`  Context: ~${current} / ${window} tokens (${pct}% of window, ${source})`));
+      ui.note(chalk.dim(`  Context: ~${current} / ${window} tokens (${pct}% of window, ${source})`));
       if (ctx.stats.tokenUsage.total > 0) {
-        console.log(chalk.dim(`  Session tokens: ${ctx.stats.tokenUsage.prompt} prompt + ${ctx.stats.tokenUsage.completion} completion = ${ctx.stats.tokenUsage.total} total`));
+        ui.note(chalk.dim(`  Session tokens: ${ctx.stats.tokenUsage.prompt} prompt + ${ctx.stats.tokenUsage.completion} completion = ${ctx.stats.tokenUsage.total} total`));
       }
       break;
     }
 
     case 'retry':
       if (ctx.lastUserPromptIdx == null || ctx.lastUserPromptIdx >= ctx.messages.length) {
-        p.log.warn('Nothing to retry yet.');
+        ui.log('warn', 'Nothing to retry yet.');
         break;
       }
       ctx.messages.splice(ctx.lastUserPromptIdx + 1);
@@ -224,7 +222,7 @@ export async function dispatchCommand(ctx, name, arg) {
       break;
 
     case 'sh':
-      if (!arg) { p.log.warn('No command provided after /sh.'); break; }
+      if (!arg) { ui.log('warn', 'No command provided after /sh.'); break; }
       await ctx.runShell(arg, { fromUser: true });
       break;
 
@@ -233,19 +231,19 @@ export async function dispatchCommand(ctx, name, arg) {
       const tmpFile = join(CONFIG_DIR, 'editor-tmp.md');
       mkdirSync(CONFIG_DIR, { recursive: true });
       writeFileSync(tmpFile, '', 'utf-8');
-      console.log(chalk.dim(`  Opening ${editor}...`));
-      await new Promise((resolve) => {
+      ui.note(chalk.dim(`  Opening ${editor}...`));
+      await ui.suspend(() => new Promise((resolve) => {
         const child = spawn(editor, [tmpFile], { stdio: 'inherit' });
         child.on('close', resolve);
-      });
+      }));
       try {
         const content = readFileSync(tmpFile, 'utf-8').trim();
         if (content) {
-          console.log(chalk.dim(`  Got ${content.length} chars from editor.`));
+          ui.note(chalk.dim(`  Got ${content.length} chars from editor.`));
           ctx.lastUserPromptIdx = ctx.messages.length;
           ctx.stats.messageCount++;
           const { text: cleanText, context, images, warnings } = resolveMentions(content, { model: opts.model });
-          warnMentions(warnings);
+          warnMentions(warnings, ui);
 
           let messageContent;
           if (images && images.length > 0) {
@@ -257,13 +255,14 @@ export async function dispatchCommand(ctx, name, arg) {
             messageContent = cleanText + context;
           }
 
+          ui.userMessage(cleanText);
           ctx.messages.push({ role: 'user', content: messageContent });
           await ctx.agentLoop({ truncateOnError: ctx.lastUserPromptIdx });
         } else {
-          p.log.warn('Editor returned empty content.');
+          ui.log('warn', 'Editor returned empty content.');
         }
       } catch (err) {
-        p.log.error(`Failed to read editor output: ${err.message}`);
+        ui.log('error', `Failed to read editor output: ${err.message}`);
       }
       break;
     }
@@ -278,51 +277,54 @@ export async function dispatchCommand(ctx, name, arg) {
         case 'ls': {
           const sessions = listSessions();
           if (sessions.length === 0) {
-            p.log.info('No saved sessions.');
+            ui.log('info', 'No saved sessions.');
           } else {
-            console.log(chalk.bold('\n  Saved Sessions'));
+            ui.note(chalk.bold('\n  Saved Sessions'));
             for (const s of sessions) {
-              console.log('  ' + chalk.hex('#36D0D0')(s.name) + chalk.dim(` (${s.modified.toLocaleDateString()})`));
+              ui.note('  ' + chalk.hex('#36D0D0')(s.name) + chalk.dim(` (${s.modified.toLocaleDateString()})`));
             }
-            console.log();
           }
           break;
         }
         case 'save': {
-          if (!subArg) { p.log.warn('Usage: /session save <name>'); break; }
+          if (!subArg) { ui.log('warn', 'Usage: /session save <name>'); break; }
           saveSession(subArg, ctx.messages);
-          p.log.success(`Session saved as "${subArg}"`);
+          ui.log('success', `Session saved as "${subArg}"`);
           break;
         }
         case 'load': {
-          if (!subArg) { p.log.warn('Usage: /session load <name>'); break; }
+          if (!subArg) { ui.log('warn', 'Usage: /session load <name>'); break; }
           const loaded = loadSession(subArg);
           if (loaded) {
             ctx.messages = loaded;
             ctx.lastUserPromptIdx = null;
-            p.log.success(`Loaded session "${subArg}" (${loaded.length} messages)`);
+            ui.log('success', `Loaded session "${subArg}" (${loaded.length} messages)`);
           } else {
-            p.log.warn(`Session "${subArg}" not found.`);
+            ui.log('warn', `Session "${subArg}" not found.`);
           }
           break;
         }
         case 'delete':
         case 'rm': {
-          if (!subArg) { p.log.warn('Usage: /session delete <name>'); break; }
+          if (!subArg) { ui.log('warn', 'Usage: /session delete <name>'); break; }
           if (deleteSession(subArg)) {
-            p.log.success(`Deleted session "${subArg}"`);
+            ui.log('success', `Deleted session "${subArg}"`);
           } else {
-            p.log.warn(`Session "${subArg}" not found.`);
+            ui.log('warn', `Session "${subArg}" not found.`);
           }
           break;
         }
         default:
-          p.log.warn('Usage: /session [list|save|load|delete] [name]');
+          ui.log('warn', 'Usage: /session [list|save|load|delete] [name]');
       }
       break;
     }
 
     case 'shimmer': {
+      if (ui.isInk) {
+        ui.log('info', 'Animation previews are available in the classic (non-TUI) output mode.');
+        break;
+      }
       const preview = createShimmer('Preview');
       preview.start();
       await new Promise(r => setTimeout(r, 2500));
@@ -332,6 +334,10 @@ export async function dispatchCommand(ctx, name, arg) {
     }
 
     case 'animations': {
+      if (ui.isInk) {
+        ui.log('info', 'Animation previews are available in the classic (non-TUI) output mode.');
+        break;
+      }
       console.log(chalk.bold.hex('#36D0D0')('\n  Animation Showcase\n'));
 
       console.log(chalk.dim('  1. Braille Spinner:'));
@@ -412,7 +418,7 @@ export async function dispatchCommand(ctx, name, arg) {
     }
 
     default:
-      p.log.warn(`Unknown command: /${name}. Type /help for the list.`);
+      ui.log('warn', `Unknown command: /${name}. Type /help for the list.`);
       break;
   }
 }

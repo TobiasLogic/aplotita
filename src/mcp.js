@@ -6,12 +6,12 @@ import chalk from 'chalk';
 const mcpClients = new Map();
 const mcpTools = new Map();
 
-export async function initMcpServers(p) {
+export async function initMcpServers(ui) {
   if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
     return;
   }
 
-  p.log.info(chalk.dim('Initializing MCP servers...'));
+  ui.log('info', chalk.dim('Initializing MCP servers...'));
 
   for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
     try {
@@ -46,9 +46,9 @@ export async function initMcpServers(p) {
         mcpTools.set(prefixedName, { definition: def, clientName: name, originalName: tool.name });
         added++;
       }
-      p.log.step(chalk.dim(`Connected to MCP server "${name}" (${added} tools)`));
+      ui.log('step', chalk.dim(`Connected to MCP server "${name}" (${added} tools)`));
     } catch (err) {
-      p.log.warn(`Failed to connect to MCP server "${name}": ${err.message}`);
+      ui.log('warn', `Failed to connect to MCP server "${name}": ${err.message}`);
     }
   }
 }
