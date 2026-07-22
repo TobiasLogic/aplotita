@@ -22,7 +22,7 @@ afterEach(() => {
 describe('context.js', () => {
   it('should resolve @file mentions', () => {
     const result = resolveMentions('Look at @package.json');
-    expect(result.context).toContain('vexra');
+    expect(result.context).toContain('aplotita');
   });
 });
 

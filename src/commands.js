@@ -389,7 +389,7 @@ export async function dispatchCommand(ctx, name, arg) {
 
       console.log(chalk.dim('  9. Typewriter:'));
       process.stdout.write('  ');
-      await typewriter('Hello from vexra!', { color: [54, 208, 208], bold: true, intervalMs: 40 });
+      await typewriter('Hello from aplótita!', { color: [54, 208, 208], bold: true, intervalMs: 40 });
 
       console.log(chalk.dim('  10. Fade Transition:'));
       process.stdout.write('  ');

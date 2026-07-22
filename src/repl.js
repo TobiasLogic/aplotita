@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import { TextPrompt } from '@clack/core';
 import chalk from 'chalk';
-import { config, validateConfig, legacyConfigMigrated } from './config.js';
+import { config, validateConfig, legacyConfigMigrated, legacyConfigSource } from './config.js';
 import { fadeTransition } from './shimmer.js';
 import { resolveMentions } from './context.js';
 import { createPasteState, feedPasteKey, insertPaste } from './paste.js';
@@ -70,7 +70,7 @@ export async function start(userOpts = {}) {
 
   await printBanner(opts);
   if (legacyConfigMigrated && !opts.headless) {
-    p.log.warn('Migrated your settings from ~/.ai-cli to ~/.vexra. The old directory was left in place and can be deleted once everything looks right.');
+    p.log.warn(`Migrated your settings from ${legacyConfigSource} to ~/.aplotita. The old directory was left in place and can be deleted once everything looks right.`);
   }
   await initMcpServers(p);
 

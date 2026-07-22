@@ -1,10 +1,10 @@
 {
-  "name": "vexra",
+  "name": "aplotita",
   "version": "1.0.0",
-  "description": "Vexra - The all-seeing CLI.",
+  "description": "aplotita - the simple terminal AI coding assistant.",
   "type": "module",
   "bin": {
-    "vexra": "./cli.js"
+    "aplotita": "./cli.js"
   },
   "scripts": {
     "start": "node cli.js",

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const [major] = process.versions.node.split('.').map(Number);
 if (major < 18) {
-  console.error('Error: vexra requires Node.js 18 or higher (current: %s).', process.version);
+  console.error('Error: aplotita requires Node.js 18 or higher (current: %s).', process.version);
   process.exit(1);
 }
 
@@ -9,10 +9,10 @@ import { program } from 'commander';
 import { start } from './src/repl.js';
 
 program
-  .name('vexra')
-  .description('Terminal-native CLI AI coding assistant with multi-provider support')
+  .name('aplotita')
+  .description('aplotita - the simple terminal AI coding assistant (multi-provider)')
   .argument('[prompt]', 'Optional initial prompt (for headless mode)')
-  .option('-m, --model <name>', 'OpenRouter model ID')
+  .option('-m, --model <name>', 'Model ID')
   .option('-t, --temperature <n>', 'Temperature (0-2)', parseFloat)
   .option('--max-tokens <n>', 'Max output tokens', parseInt)
   .option('-c, --continue', 'Resume the previous saved session')

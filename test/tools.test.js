@@ -18,7 +18,7 @@ describe('tools.js path containment guards', () => {
 
   it('read_file still reads an in-project file', async () => {
     const res = await executeTool('read_file', { path: 'package.json' });
-    expect(res.content).toContain('"name": "vexra"');
+    expect(res.content).toContain('"name": "aplotita"');
   });
 
   it('list_dir refuses paths outside the project directory', async () => {

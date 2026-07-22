@@ -329,15 +329,15 @@ export function createSession(ctx) {
       force,
       currentTokens: currentContextTokens(),
       summarize: summarizeMessages,
-      log: (m) => process.stderr.write(chalk.dim(`\n[vexra] ${m}\n`)),
+      log: (m) => process.stderr.write(chalk.dim(`\n[aplotita] ${m}\n`)),
     });
     if (result.compacted) {
       ctx.lastPromptTokens = null;
       ctx.lastPromptLen = null;
       if (result.reason === 'dropped') {
-        process.stderr.write(chalk.dim(`[vexra] Summarization failed; dropped ${result.evicted} old message(s). (${result.error})\n`));
+        process.stderr.write(chalk.dim(`[aplotita] Summarization failed; dropped ${result.evicted} old message(s). (${result.error})\n`));
       } else {
-        process.stderr.write(chalk.dim(`[vexra] Compacted ${result.evicted} message(s) into a summary. (~${result.tokens} tokens)\n`));
+        process.stderr.write(chalk.dim(`[aplotita] Compacted ${result.evicted} message(s) into a summary. (~${result.tokens} tokens)\n`));
       }
     }
     return result;
