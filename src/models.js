@@ -46,6 +46,14 @@ function saveCache(models) {
   } catch {}
 }
 
+export function cachedContextLength(modelId) {
+  if (!modelId) return null;
+  const cached = loadCache();
+  if (!cached || !Array.isArray(cached.models)) return null;
+  const m = cached.models.find((x) => x.id === modelId);
+  return m && m.contextLength ? m.contextLength : null;
+}
+
 export function formatModelList(models) {
   return models.map(m => {
     const ctx = m.contextLength ? `${(m.contextLength / 1000).toFixed(0)}k ctx` : '';
