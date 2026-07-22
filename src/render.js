@@ -221,7 +221,7 @@ export function renderGradientSeparator(width = 58) {
 }
 
 export function exportMarkdown(messages, file) {
-  const lines = ['# ai-cli conversation', '', `Exported ${new Date().toISOString()}`, ''];
+  const lines = ['# aplótita conversation', '', `Exported ${new Date().toISOString()}`, ''];
   for (const m of messages) {
     if (m.role === 'system') continue;
     const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
@@ -288,7 +288,7 @@ export async function printBanner(opts) {
   const innerW = cols - 2;
   console.log();
   console.log(chalk.dim('╭' + '─'.repeat(innerW) + '╮'));
-  await shimmerText('vexra', {
+  await shimmerText('aplótita', {
     prefix: chalk.dim('│') + '  ',
     suffix: chalk.dim(' - TUI AI Assistant'),
   });

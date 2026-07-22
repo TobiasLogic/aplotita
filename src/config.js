@@ -8,18 +8,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 dotenv.config({ path: resolve(__dirname, '..', '.env') });
 
-export const CONFIG_DIR = join(homedir(), '.vexra');
+export const CONFIG_DIR = join(homedir(), '.aplotita');
 export const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
-const LEGACY_CONFIG_DIR = join(homedir(), '.ai-cli');
+const LEGACY_CONFIG_DIRS = [join(homedir(), '.vexra'), join(homedir(), '.ai-cli')];
 
 export let legacyConfigMigrated = false;
+export let legacyConfigSource = '';
 
 function migrateLegacyConfigDir() {
   try {
-    if (existsSync(CONFIG_DIR) || !existsSync(LEGACY_CONFIG_DIR)) return;
-    cpSync(LEGACY_CONFIG_DIR, CONFIG_DIR, { recursive: true });
+    if (existsSync(CONFIG_DIR)) return;
+    const source = LEGACY_CONFIG_DIRS.find((d) => existsSync(d));
+    if (!source) return;
+    cpSync(source, CONFIG_DIR, { recursive: true });
     legacyConfigMigrated = true;
+    legacyConfigSource = source;
   } catch {}
 }
 
@@ -30,8 +34,8 @@ const DEFAULTS = {
   model: 'openai/gpt-4o',
   temperature: 0.7,
   maxTokens: 128000,
-  referer: 'https://github.com/TobiasLogic/vexra',
-  title: 'vexra',
+  referer: 'https://github.com/TobiasLogic/aplotita',
+  title: 'aplotita',
 };
 
 const INDEXER_DEFAULTS = {
@@ -103,9 +107,9 @@ export const config = {
   maxTokens: resolveInt(process.env.OPENROUTER_MAX_TOKENS, fileCfg.maxTokens, DEFAULTS.maxTokens, 1),
   referer: resolveString(process.env.OPENROUTER_REFERER, fileCfg.referer, DEFAULTS.referer),
   title: resolveString(process.env.OPENROUTER_TITLE, fileCfg.title, DEFAULTS.title),
-  context_window: resolveInt(process.env.VEXRA_CONTEXT_WINDOW, fileCfg.context_window, 128000, 1),
-  compact_high_watermark: resolveFloat(process.env.VEXRA_COMPACT_HIGH, fileCfg.compact_high_watermark, 0.75, 0.1, 0.95),
-  compact_low_watermark: resolveFloat(process.env.VEXRA_COMPACT_LOW, fileCfg.compact_low_watermark, 0.5, 0.05, 0.9),
+  context_window: resolveInt(process.env.APLOTITA_CONTEXT_WINDOW, fileCfg.context_window, 128000, 1),
+  compact_high_watermark: resolveFloat(process.env.APLOTITA_COMPACT_HIGH, fileCfg.compact_high_watermark, 0.75, 0.1, 0.95),
+  compact_low_watermark: resolveFloat(process.env.APLOTITA_COMPACT_LOW, fileCfg.compact_low_watermark, 0.5, 0.05, 0.9),
   mcpServers: fileCfg.mcpServers && typeof fileCfg.mcpServers === 'object' ? fileCfg.mcpServers : {},
   indexer: {
     ...INDEXER_DEFAULTS,

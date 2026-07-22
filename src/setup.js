@@ -7,7 +7,7 @@ import { createSpinner, typewriter } from './shimmer.js';
 
 export async function runProviderSetup(opts) {
   console.log();
-  await typewriter('Welcome to vexra!', { color: [54, 208, 208], bold: true, intervalMs: 30 });
+  await typewriter('Welcome to aplótita!', { color: [54, 208, 208], bold: true, intervalMs: 30 });
   console.log(chalk.dim("  Let's set up your AI provider.\n"));
 
   const providerId = await p.select({
@@ -112,7 +112,7 @@ export async function runProviderSetup(opts) {
   });
 
   if (saved) {
-    p.log.success(`Saved to ~/.vexra/config.json`);
+    p.log.success(`Saved to ~/.aplotita/config.json`);
   } else {
     p.log.warn('Could not save config file. Settings will only apply this session.');
   }

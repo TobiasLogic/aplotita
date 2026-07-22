@@ -560,7 +560,7 @@ async function execWebFetch(args) {
     return { error: 'Only http and https URLs are supported.' };
   }
   try {
-    const res = await fetchFollow(url, { 'User-Agent': 'vexra (+https://github.com/TobiasLogic/vexra)' });
+    const res = await fetchFollow(url, { 'User-Agent': 'aplotita (+https://github.com/TobiasLogic/aplotita)' });
     if (!res.ok) return { error: `HTTP ${res.status}: ${res.statusText}` };
     const contentType = res.headers.get('content-type') || '';
     const raw = await res.text();

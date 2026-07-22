@@ -205,7 +205,7 @@ export async function* streamChat(messages, opts = {}) {
         else if (r.type === 'usage') yield { ...r.value, _type: 'usage' };
         else if (r.type === 'error') {
           parseErrorCount++;
-          process.stderr.write(`\n[vexra: warn] malformed SSE chunk received\n`);
+          process.stderr.write(`\n[aplotita: warn] malformed SSE chunk received\n`);
         }
       }
 
@@ -220,7 +220,7 @@ export async function* streamChat(messages, opts = {}) {
   } finally {
     try { await reader.cancel(); } catch {}
     if (parseErrorCount > 0) {
-      process.stderr.write(`\n[vexra: warn] ${parseErrorCount} malformed SSE chunk(s) were dropped from the response.\n`);
+      process.stderr.write(`\n[aplotita: warn] ${parseErrorCount} malformed SSE chunk(s) were dropped from the response.\n`);
     }
     reader.releaseLock();
   }

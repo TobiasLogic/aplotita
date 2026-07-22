@@ -1,12 +1,12 @@
-# Vexra
+# aplótita
 
-**The All-Seeing CLI Agent**
+**The simple terminal AI coding assistant**
 
-![Vexra](https://img.shields.io/badge/Vexra-The_All--Seeing_CLI-36D0D0?style=for-the-badge)
+![aplotita](https://img.shields.io/badge/apl%C3%B3tita-simplicity-36D0D0?style=for-the-badge)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-48E080?style=for-the-badge&logo=node.js&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-5555FF?style=for-the-badge)
 
-Vexra is a terminal-native AI coding assistant that lives inside your workflow. It maps your
+aplótita is a terminal-native AI coding assistant that lives inside your workflow. It maps your
 codebase, runs tools, edits files, executes commands, and can drive long autonomous tasks, all
 from a fast, animated TUI. Bring your own model from OpenRouter, OpenAI, Anthropic, Gemini,
 Groq, DeepSeek, xAI, or a local Ollama.
@@ -67,7 +67,7 @@ Groq, DeepSeek, xAI, or a local Ollama.
 ## Requirements
 
 - **Node.js 18 or newer.** Semantic code indexing uses the built-in `node:sqlite` (Node 22.5+);
-  on older versions the indexer self-disables and the rest of Vexra works normally.
+  on older versions the indexer self-disables and the rest of aplótita works normally.
 - An API key from a [supported provider](#supported-providers), or a local
   [Ollama](https://ollama.com) install (no key needed). Without one, the index falls back to
   keyword search.
@@ -77,7 +77,7 @@ Groq, DeepSeek, xAI, or a local Ollama.
 ## Installation
 
 > **Canonical source is GitHub.** All commands below install the exact code in this repo. The
-> package name is `vexra`, so it runs as `vexra` and uninstalls by name no matter how you
+> package name is `aplotita`, so it runs as `aplotita` and uninstalls by name no matter how you
 > installed it.
 
 ### Try it instantly, no install
@@ -86,10 +86,10 @@ Run the latest straight from GitHub without adding anything global:
 
 ```bash
 # npm
-npx github:TobiasLogic/vexra
+npx github:TobiasLogic/aplotita
 
 # pnpm
-pnpm dlx github:TobiasLogic/vexra
+pnpm dlx github:TobiasLogic/aplotita
 ```
 
 ### Global install
@@ -98,30 +98,30 @@ Pick your package manager:
 
 ```bash
 # npm
-npm install -g github:TobiasLogic/vexra
+npm install -g github:TobiasLogic/aplotita
 
 # pnpm
-pnpm add -g github:TobiasLogic/vexra
+pnpm add -g github:TobiasLogic/aplotita
 
 # yarn
-yarn global add github:TobiasLogic/vexra
+yarn global add github:TobiasLogic/aplotita
 
 # bun
-bun add -g github:TobiasLogic/vexra
+bun add -g github:TobiasLogic/aplotita
 ```
 
-Then run `vexra` from anywhere.
+Then run `aplotita` from anywhere.
 
-> If `vexra` isn't found after install, make sure your package manager's global bin is on your
+> If `aplotita` isn't found after install, make sure your package manager's global bin is on your
 > `PATH` (`npm bin -g`, `pnpm bin -g`, `~/.yarn/bin`, or `~/.bun/bin`).
 
 ### From source
 
 ```bash
-git clone https://github.com/TobiasLogic/vexra.git
-cd vexra
+git clone https://github.com/TobiasLogic/aplotita.git
+cd aplotita
 npm install
-npm install -g .        # installs the `vexra` command globally
+npm install -g .        # installs the `aplotita` command globally
 ```
 
 Prefer not to install globally? Run it in place:
@@ -133,10 +133,10 @@ node cli.js             # from inside the cloned repo
 ### For contributors (live-linked)
 
 ```bash
-git clone https://github.com/TobiasLogic/vexra.git
-cd vexra
+git clone https://github.com/TobiasLogic/aplotita.git
+cd aplotita
 npm install
-npm link                # symlinks `vexra` to your working tree
+npm link                # symlinks `aplotita` to your working tree
 npm test                # run the test suite (vitest)
 ```
 
@@ -145,10 +145,10 @@ npm test                # run the test suite (vitest)
 ## Quick Start
 
 ```bash
-vexra
+aplotita
 ```
 
-On first launch Vexra walks you through picking a provider, pasting an API key, and choosing a
+On first launch aplótita walks you through picking a provider, pasting an API key, and choosing a
 model, then drops you into the chat. Type a request, hit Enter, and approve any file edits or
 commands the agent proposes.
 
@@ -162,7 +162,7 @@ commands the agent proposes.
 ## Usage
 
 ```text
-vexra [prompt] [options]
+aplotita [prompt] [options]
 
 Arguments:
   prompt                  Optional initial prompt (used for headless / one-shot runs)
@@ -181,14 +181,14 @@ Options:
 Pass a prompt plus `--headless` to run autonomously, which is ideal for CI or scripting:
 
 ```bash
-vexra "Fix the failing tests in test/api.test.js" --headless
-vexra -m anthropic/claude-sonnet-4 "Summarize TODOs across the repo" --headless
+aplotita "Fix the failing tests in test/api.test.js" --headless
+aplotita -m anthropic/claude-sonnet-4 "Summarize TODOs across the repo" --headless
 ```
 
 ### Resume where you left off
 
 ```bash
-vexra --continue
+aplotita --continue
 ```
 
 ---
@@ -225,7 +225,7 @@ Inside the TUI:
 
 ## Attaching Context with `@`
 
-Reference files, globs, or images right in your prompt and Vexra inlines them automatically:
+Reference files, globs, or images right in your prompt and aplótita inlines them automatically:
 
 ```text
 explain the retry logic in @src/api.js
@@ -260,24 +260,24 @@ for reference.
 
 ## Configuration
 
-Vexra stores its config and history under `~/.vexra/` (an existing `~/.ai-cli/` from older
-versions is migrated automatically on first run):
+aplótita stores its config and history under `~/.aplotita/` (an existing `~/.vexra/` or `~/.ai-cli/`
+from older versions is migrated automatically on first run):
 
 | Path | Purpose |
 | --- | --- |
-| `~/.vexra/config.json` | Saved provider, API key, model, and defaults |
-| `~/.vexra/history.json` | Auto-saved conversation history |
-| `~/.vexra/sessions/` | Named sessions from `/session save` |
-| `~/.vexra/index/` | Semantic code index (one SQLite database per project) |
+| `~/.aplotita/config.json` | Saved provider, API key, model, and defaults |
+| `~/.aplotita/history.json` | Auto-saved conversation history |
+| `~/.aplotita/sessions/` | Named sessions from `/session save` |
+| `~/.aplotita/index/` | Semantic code index (one SQLite database per project) |
 
 ### Semantic code index
 
-On startup Vexra indexes your project for semantic retrieval and keeps it fresh as you edit. It
+On startup aplótita indexes your project for semantic retrieval and keeps it fresh as you edit. It
 chunks your files, embeds them through an OpenAI-compatible `/embeddings` endpoint, and stores the
 vectors (`sqlite-vec`) next to a BM25 (FTS5) and exact-identifier index; each turn the most
 relevant snippets are folded into the model's context.
 
-Tune it with an optional `indexer` block in `~/.vexra/config.json` (every field has a default):
+Tune it with an optional `indexer` block in `~/.aplotita/config.json` (every field has a default):
 
 ```json
 {
@@ -301,7 +301,7 @@ Tune it with an optional `indexer` block in `~/.vexra/config.json` (every field 
 
 ### Per-project settings
 
-Drop one of these in your project (Vexra searches upward from your working directory):
+Drop one of these in your project (aplótita searches upward from your working directory):
 
 - **`AGENTS.md`** or **`.ai-cli.md`**: freeform instructions injected into the system prompt
   (project conventions, do's and don'ts, architecture notes).
@@ -325,7 +325,7 @@ When running **from source**, a `.env` file in the repo root is loaded automatic
 
 ## Safety
 
-Vexra asks before applying file writes and edits, and before running shell commands the agent
+aplótita asks before applying file writes and edits, and before running shell commands the agent
 proposes. A built-in screen flags genuinely destructive operations: recursive force-deletes,
 `git push --force` / `reset --hard` / `clean -f`, piping remote scripts into a shell, raw disk
 writes, `mkfs`, fork bombs, and power-state changes. Those always require explicit confirmation.
@@ -338,7 +338,7 @@ In `--headless` and `/auto` mode tool use is auto-approved, so point those at tr
 **Update** (GitHub install): re-run your install command, for example:
 
 ```bash
-npm install -g github:TobiasLogic/vexra
+npm install -g github:TobiasLogic/aplotita
 ```
 
 **Update** (from source):
@@ -350,10 +350,10 @@ git pull && npm install -g .
 **Uninstall** by package name, regardless of how you installed:
 
 ```bash
-npm uninstall -g vexra
-# or: pnpm rm -g vexra
-# or: yarn global remove vexra
-# or: bun remove -g vexra
+npm uninstall -g aplotita
+# or: pnpm rm -g aplotita
+# or: yarn global remove aplotita
+# or: bun remove -g aplotita
 ```
 
 ---
