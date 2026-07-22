@@ -6,8 +6,6 @@ import {
   createShimmer, createSpinner, createPulse, createParticles, createMatrix,
 } from './shimmer.js';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 export const LOADER_STYLES = ['braille', 'dots', 'arc', 'circle', 'square', 'line', 'grow', 'shimmer', 'pulse', 'particles', 'matrix'];
 
 export function createLoader(label, style) {
@@ -239,15 +237,7 @@ export function printActionRequest({ verb, target, hex, note, danger = false }) 
 }
 
 export function renderGradientSeparator(width = 58) {
-  let out = '';
-  for (let i = 0; i < width; i++) {
-    const t = i / width;
-    const r = Math.round(54 + (180 - 54) * Math.sin(t * Math.PI));
-    const g = Math.round(208 + (100 - 208) * Math.sin(t * Math.PI));
-    const b = Math.round(208 + (255 - 208) * Math.sin(t * Math.PI));
-    out += chalk.rgb(r, g, b)('─');
-  }
-  return out;
+  return chalk.dim('─'.repeat(width));
 }
 
 export function exportMarkdown(messages, file) {
@@ -323,60 +313,20 @@ const WORDMARK = [
   '╩ ╩  ╩    ╩═╝  ╚═╝   ╩   ╩   ╩   ╩ ╩',
 ];
 
-function gradientRgb(t) {
-  return [
-    Math.round(54 + (180 - 54) * t),
-    Math.round(208 + (100 - 208) * t),
-    Math.round(208 + (255 - 208) * t),
-  ];
-}
-
-function styleWordmarkLine(line, sweep) {
-  const w = Math.max(line.length, 1);
-  let out = '';
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === ' ') { out += ' '; continue; }
-    const t = i / w;
-    let [r, g, b] = gradientRgb(t);
-    if (sweep != null) {
-      const boost = Math.max(0, 1 - Math.abs(t - sweep) * 6);
-      r = Math.min(255, Math.round(r + (255 - r) * boost));
-      g = Math.min(255, Math.round(g + (255 - g) * boost));
-      b = Math.min(255, Math.round(b + (255 - b) * boost));
-    }
-    out += chalk.rgb(r, g, b)(ch);
-  }
-  return out;
-}
-
-function wordmarkFrame(sweep) {
-  return WORDMARK.map((l) => '  ' + styleWordmarkLine(l, sweep)).join('\n');
+function wordmarkFrame() {
+  return WORDMARK.map((l) => '  ' + chalk.bold.gray(l)).join('\n');
 }
 
 export function printWordmark() {
-  console.log(wordmarkFrame(null));
+  console.log(wordmarkFrame());
 }
 
-async function animateWordmark({ frames = 16, intervalMs = 55 } = {}) {
-  if (!process.stdout.isTTY) { printWordmark(); return; }
-  process.stdout.write('\x1b[?25l');
-  for (let f = 0; f <= frames; f++) {
-    const sweep = -0.2 + (1.4 * f) / frames;
-    if (f > 0) process.stdout.write('\x1b[3A');
-    process.stdout.write('\r' + wordmarkFrame(sweep) + '\n');
-    await sleep(intervalMs);
-  }
-  process.stdout.write('\x1b[?25h');
+async function animateWordmark() {
+  printWordmark();
 }
 
 export function inlineWordmark(text = 'aplótita') {
-  const chars = [...text];
-  const w = Math.max(chars.length, 1);
-  return chars.map((ch, i) => {
-    const [r, g, b] = gradientRgb(i / w);
-    return chalk.bold.rgb(r, g, b)(ch);
-  }).join('');
+  return chalk.bold.gray(text);
 }
 
 export function promptLine(mode) {
