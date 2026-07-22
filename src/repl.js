@@ -369,6 +369,22 @@ function warnMentions(warnings) {
   for (const w of warnings || []) p.log.warn(w);
 }
 
+export function recentUserText(msgs, n = 3) {
+  const texts = [];
+  for (let i = msgs.length - 1; i >= 0 && texts.length < n; i--) {
+    const m = msgs[i];
+    if (!m || m.role !== 'user') continue;
+    let t = '';
+    if (typeof m.content === 'string') t = m.content;
+    else if (Array.isArray(m.content)) {
+      const part = m.content.find((x) => x?.type === 'text');
+      if (part) t = part.text;
+    }
+    if (t && t.trim()) texts.push(t);
+  }
+  return texts.reverse().join('\n');
+}
+
 function exportMarkdown(messages, file) {
   const lines = ['# ai-cli conversation', '', `Exported ${new Date().toISOString()}`, ''];
   for (const m of messages) {
@@ -952,25 +968,12 @@ export async function start(userOpts = {}) {
     if (executedSh) return 'continue';
   }
 
-  function latestUserText(msgs) {
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.role !== 'user') continue;
-      if (typeof m.content === 'string') return m.content;
-      if (Array.isArray(m.content)) {
-        const part = m.content.find((x) => x?.type === 'text');
-        if (part) return part.text;
-      }
-    }
-    return '';
-  }
-
   // Retrieve code relevant to the current turn once, reused across agent-loop
   // iterations. Folded into the outgoing system message by streamAssistant.
   async function refreshRetrieval() {
     retrievalBlock = '';
     if (!indexer) return;
-    const text = latestUserText(messages);
+    const text = recentUserText(messages, 3);
     if (!text.trim()) return;
     try {
       const block = await indexer.getContextBlock(text, { limit: 6, maxChars: 6000 });
