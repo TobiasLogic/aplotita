@@ -81,95 +81,104 @@ function highlightCode(code, lang) {
   }
 }
 
-function formatFencedBlock(code, lang) {
-  const highlighted = highlightCode(code.trimEnd(), lang);
-  return `\n${highlighted}\n`;
+function frameWidth() {
+  return Math.max(24, Math.min((process.stdout.columns || 80) - 2, 72));
 }
 
-function renderMarkdownInline(text) {
+function formatFencedBlock(code, lang) {
+  const width = frameWidth();
+  const label = (lang || 'code').toLowerCase();
+  const dashes = '─'.repeat(Math.max(1, width - label.length - 4));
+  const header = chalk.dim('  ╭─ ') + chalk.hex('#36D0D0')(label) + chalk.dim(` ${dashes}`);
+  const footer = chalk.dim('  ╰' + '─'.repeat(width - 1));
+  const highlighted = highlightCode(code.replace(/\s+$/, ''), lang);
+  const body = highlighted.split('\n').map((l) => chalk.dim('  │ ') + l).join('\n');
+  return `\n${header}\n${body}\n${footer}\n`;
+}
+
+function renderInline(text) {
   let out = text;
+  out = out.replace(/`([^`]+)`/g, (_, t) => chalk.hex('#9EE6E6')(t));
   out = out.replace(/\*\*(.+?)\*\*/g, (_, t) => chalk.bold(t));
   out = out.replace(/__(.+?)__/g, (_, t) => chalk.bold(t));
-  out = out.replace(/`([^`]+)`/g, (_, t) => chalk.cyan(t));
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => chalk.underline.blue(text) + chalk.dim(`(${url})`));
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => chalk.underline.blue(label) + chalk.dim(`(${url})`));
   return out;
 }
 
-export function createStreamWriter() {
-  let state = 'text';
-  let blockLang = '';
-  let blockBuf = '';
+export function renderMarkdownLine(line) {
+  if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+    return chalk.dim('  ' + '─'.repeat(frameWidth() - 2));
+  }
+  const heading = line.match(/^(#{1,6})\s+(.*)$/);
+  if (heading) {
+    const level = heading[1].length;
+    const text = renderInline(heading[2]);
+    if (level === 1) return '\n' + chalk.bold.underline.hex('#36D0D0')(text);
+    if (level === 2) return chalk.bold.hex('#48E080')('▍ ') + chalk.bold.hex('#48E080')(text);
+    return chalk.bold.hex('#B478FF')(text);
+  }
+  const quote = line.match(/^\s*>\s?(.*)$/);
+  if (quote) return chalk.dim('  ▏ ') + chalk.italic.dim(renderInline(quote[1]));
+  const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
+  if (bullet) return `${bullet[1]}  ${chalk.hex('#36D0D0')('•')} ${renderInline(bullet[2])}`;
+  const numbered = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+  if (numbered) return `${numbered[1]}  ${chalk.hex('#36D0D0')(numbered[2] + '.')} ${renderInline(numbered[3])}`;
+  return renderInline(line);
+}
 
-  function flushBlock() {
-    if (!blockBuf) return;
-    process.stdout.write(formatFencedBlock(blockBuf.trimEnd(), blockLang));
-    blockBuf = '';
-    blockLang = '';
+export function createStreamWriter() {
+  let buffer = '';
+  let inCode = false;
+  let codeLang = '';
+  let codeLines = [];
+
+  function handleLine(line) {
+    const fence = line.match(/^\s*```(.*)$/);
+    if (inCode) {
+      if (fence) {
+        process.stdout.write(formatFencedBlock(codeLines.join('\n'), codeLang));
+        inCode = false;
+        codeLang = '';
+        codeLines = [];
+      } else {
+        codeLines.push(line);
+      }
+      return;
+    }
+    if (fence) {
+      inCode = true;
+      codeLang = fence[1].trim();
+      codeLines = [];
+      return;
+    }
+    process.stdout.write(renderMarkdownLine(line) + '\n');
   }
 
-  return function write(raw) {
-    let text = raw;
+  function write(raw) {
+    buffer += raw;
+    let nl;
+    while ((nl = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, nl).replace(/\r$/, '');
+      buffer = buffer.slice(nl + 1);
+      handleLine(line);
+    }
+  }
 
-    while (text.length > 0) {
-      if (state === 'text') {
-        const idx = text.indexOf('```');
-        if (idx === -1) {
-          process.stdout.write(renderMarkdownInline(text));
-          return;
-        }
-
-        process.stdout.write(renderMarkdownInline(text.slice(0, idx)));
-        text = text.slice(idx + 3);
-        const nl = text.indexOf('\n');
-
-        if (nl === -1) {
-          state = 'maybe-language';
-          blockBuf = text;
-          text = '';
-        } else {
-          blockLang = text.slice(0, nl).trim();
-          text = text.slice(nl + 1);
-          state = 'block';
-        }
-      } else if (state === 'maybe-language') {
-        const nl = text.indexOf('\n');
-        if (nl === -1) {
-          blockBuf += text;
-          text = '';
-        } else if (blockBuf.trim() === '' && text.slice(0, nl).trim() === '') {
-          blockLang = '';
-          text = text.slice(nl + 1);
-          state = 'block';
-        } else {
-          process.stdout.write('```' + blockBuf);
-          blockBuf = '';
-          state = 'text';
-        }
-      } else if (state === 'block') {
-        blockBuf += text;
-        text = '';
-
-        const marker = '\n```';
-        const idx = blockBuf.indexOf(marker);
-
-        if (idx === -1) return;
-
-        const code = blockBuf.slice(0, idx);
-        let after = blockBuf.slice(idx + marker.length);
-
-        blockBuf = code;
-        flushBlock();
-
-        blockLang = '';
-
-        if (after.startsWith('\r')) after = after.slice(1);
-        if (after.startsWith('\n')) after = after.slice(1);
-
-        state = 'text';
-        if (after) text = after;
-      }
+  write.end = () => {
+    if (buffer.length > 0) {
+      const last = buffer.replace(/\r$/, '');
+      buffer = '';
+      if (inCode) codeLines.push(last);
+      else handleLine(last);
+    }
+    if (inCode) {
+      process.stdout.write(formatFencedBlock(codeLines.join('\n'), codeLang));
+      inCode = false;
+      codeLines = [];
     }
   };
+
+  return write;
 }
 
 export function boxOutput(label, content) {

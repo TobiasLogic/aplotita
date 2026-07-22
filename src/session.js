@@ -187,6 +187,8 @@ export function createSession(ctx) {
         }
       }
 
+      writer.end();
+
       if (firstChunk && toolCallFragments.length === 0) {
         spinner.stop();
         console.log(chalk.dim('(empty response)'));
