@@ -270,6 +270,30 @@ export class IndexDB {
     return out;
   }
 
+  searchSymbols(text, k) {
+    const all = String(text || '').match(/[A-Za-z0-9_]{3,}/g);
+    if (!all || all.length === 0) return [];
+    const tokens = [...new Set(all)].sort((a, b) => b.length - a.length).slice(0, 5);
+    const fileStmt = this.db.prepare("SELECT id FROM files WHERE symbols LIKE ? ESCAPE '\\' LIMIT ?");
+    const chunkStmt = this.db.prepare("SELECT id FROM chunks WHERE file_id = ? AND body LIKE ? ESCAPE '\\' ORDER BY start_line LIMIT ?");
+    const seen = new Set();
+    const out = [];
+    for (const t of tokens) {
+      if (out.length >= k) break;
+      const esc = t.replace(/[\\%_]/g, '\\$&');
+      for (const f of fileStmt.all(`% ${esc}"%`, k)) {
+        for (const c of chunkStmt.all(f.id, `%${esc}%`, 2)) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          out.push({ id: c.id });
+          if (out.length >= k) break;
+        }
+        if (out.length >= k) break;
+      }
+    }
+    return out;
+  }
+
   getChunksByIds(ids) {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => '?').join(', ');

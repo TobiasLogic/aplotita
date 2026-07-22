@@ -111,6 +111,29 @@ describe('IndexDB', () => {
     db.close();
   });
 
+  it('resolves extracted symbols to their defining chunk', () => {
+    const db = new IndexDB(':memory:', { dim: 4, model: 'test' }).open();
+    const rows = db.replaceFile({
+      path: 'a.js', mtime: 1, size: 1, hash: 'h', lang: 'javascript',
+      symbols: JSON.stringify(['fn renderWidget', 'class WidgetFactory']),
+      chunks: [
+        { startLine: 1, endLine: 2, body: 'function renderWidget() { return 1; }' },
+        { startLine: 3, endLine: 4, body: 'class WidgetFactory {}' },
+        { startLine: 5, endLine: 6, body: 'const otherThing = 2;' },
+      ],
+    });
+    const fnIds = db.searchSymbols('please call renderWidget here', 5).map((r) => r.id);
+    expect(fnIds).toContain(rows[0].id);
+    expect(fnIds).not.toContain(rows[2].id);
+
+    const classIds = db.searchSymbols('new WidgetFactory()', 5).map((r) => r.id);
+    expect(classIds).toContain(rows[1].id);
+
+    // a token that only appears in a body (not among symbols) is not a symbol hit
+    expect(db.searchSymbols('otherThing', 5)).toHaveLength(0);
+    db.close();
+  });
+
   it('replaces a file\'s chunks and prunes stale FTS/vector rows', () => {
     const db = new IndexDB(':memory:', { dim: 4, model: 'test' }).open();
     db.replaceFile({ path: 'a.js', mtime: 1, size: 1, hash: 'h1', lang: 'javascript', symbols: '[]',

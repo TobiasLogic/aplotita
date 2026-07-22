@@ -242,8 +242,9 @@ export class VexraIndexer {
     }
     const ftsList = this.db.searchFts(text, k);
     const exactList = this.db.searchExact(text, k);
+    const symbolList = this.db.searchSymbols(text, k);
 
-    const fused = reciprocalRankFusion([vecList, ftsList, exactList], [1.0, 0.8, 0.5]);
+    const fused = reciprocalRankFusion([vecList, ftsList, exactList, symbolList], [1.0, 0.8, 0.5, 0.9]);
     if (fused.length === 0) return [];
 
     const scoreById = new Map(fused);
