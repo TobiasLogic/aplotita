@@ -21,6 +21,10 @@ import { createPasteState, feedPasteKey, insertPaste } from './paste.js';
 import { fetchModels, formatModelList, cachedContextLength } from './models.js';
 import { estimateTokens, estimateMessagesTokens } from './tokens.js';
 import { compactMessages } from './compaction.js';
+import {
+  accumulateToolCalls, assistantMessageWithToolCalls, truncateMessagesOnError,
+  runAgentLoop, executeToolCalls,
+} from './agent.js';
 import { listSessions, saveSession, loadSession, deleteSession, sessionExists } from './sessions.js';
 import { PROVIDERS, getProvider, getProviderChoices } from './providers.js';
 import { initMcpServers, cleanupMcpServers, getMcpToolDefinitions, isMcpTool, executeMcpTool } from './mcp.js';
@@ -756,19 +760,6 @@ export async function start(userOpts = {}) {
     if (fromUser) saveHistory(messages);
   }
 
-  function accumulateToolCalls(existing, fragments) {
-    for (const frag of fragments) {
-      const idx = frag.index;
-      if (!existing[idx]) {
-        existing[idx] = { id: frag.id || '', type: 'function', function: { name: '', arguments: '' } };
-      }
-      if (frag.id) existing[idx].id = frag.id;
-      if (frag.function?.name) existing[idx].function.name += frag.function.name;
-      if (frag.function?.arguments) existing[idx].function.arguments += frag.function.arguments;
-    }
-    return existing;
-  }
-
   async function streamAssistant({ truncateOnError }) {
     const spinner = createLoader('Thinking', loaderStyle);
     spinner.start();
@@ -839,7 +830,7 @@ export async function start(userOpts = {}) {
       } else {
         p.log.error(chalk.red(err.message));
       }
-      if (truncateOnError != null) messages.splice(truncateOnError);
+      truncateMessagesOnError(messages, truncateOnError);
       return;
     } finally {
       spinner.stop();
@@ -862,15 +853,7 @@ export async function start(userOpts = {}) {
 
     if (toolCallFragments.length > 0) {
       const toolCalls = toolCallFragments.filter(tc => tc && tc.function);
-      const assistantMsg = {
-        role: 'assistant',
-        content: fullResponse || null,
-        tool_calls: toolCalls.map(tc => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        })),
-      };
+      const assistantMsg = assistantMessageWithToolCalls(fullResponse, toolCalls);
 
       if (!fullResponse.trim()) {
         messages.push(assistantMsg);
@@ -878,44 +861,31 @@ export async function start(userOpts = {}) {
         messages[messages.length - 1] = assistantMsg;
       }
 
-      for (const tc of toolCalls) {
-        let args;
-        try {
-          args = JSON.parse(tc.function.arguments);
-        } catch {
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: 'Invalid arguments' }) });
-          continue;
-        }
-
-        const approved = await confirmToolUse(tc.function.name, args);
-        if (!approved) {
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error: 'User rejected this action' }) });
-          console.log(chalk.dim('  Skipped.\n'));
-          continue;
-        }
-
-        let result;
-        if (isMcpTool(tc.function.name)) {
-          result = await executeMcpTool(tc.function.name, args);
-        } else {
-          result = await executeTool(tc.function.name, args);
-        }
-        
-        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
-
-        if (result.success || result.content || result.entries || result.output) {
-          const summary = result.content
-            ? result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '')
-            : result.entries
-            ? result.entries.slice(0, 200)
-            : result.output
-            ? result.output.slice(0, 200)
-            : JSON.stringify(result);
-          console.log(chalk.dim(`  ${tc.function.name} → `) + chalk.green('ok') + chalk.dim(` ${summary.slice(0, 80)}`));
-        } else if (result.error) {
-          console.log(chalk.dim(`  ${tc.function.name} → `) + chalk.red(result.error));
-        }
-      }
+      await executeToolCalls(toolCalls, {
+        confirm: confirmToolUse,
+        isMcpTool,
+        executeMcpTool,
+        executeTool,
+        onResult: (m) => messages.push(m),
+        onLog: ({ name, result, rejected }) => {
+          if (rejected) {
+            console.log(chalk.dim('  Skipped.\n'));
+            return;
+          }
+          if (result.success || result.content || result.entries || result.output) {
+            const summary = result.content
+              ? result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '')
+              : result.entries
+              ? result.entries.slice(0, 200)
+              : result.output
+              ? result.output.slice(0, 200)
+              : JSON.stringify(result);
+            console.log(chalk.dim(`  ${name} → `) + chalk.green('ok') + chalk.dim(` ${summary.slice(0, 80)}`));
+          } else if (result.error) {
+            console.log(chalk.dim(`  ${name} → `) + chalk.red(result.error));
+          }
+        },
+      });
 
       return 'continue';
     }
@@ -1004,10 +974,7 @@ export async function start(userOpts = {}) {
 
   async function agentLoop({ truncateOnError, maxLoops = MAX_AGENT_LOOPS }) {
     await refreshRetrieval();
-    for (let i = 0; i < maxLoops; i++) {
-      const result = await streamAssistant({ truncateOnError });
-      if (result !== 'continue') break;
-    }
+    await runAgentLoop(() => streamAssistant({ truncateOnError }), maxLoops);
   }
 
   if (initialPrompt) {
