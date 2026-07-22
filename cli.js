@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const [major] = process.versions.node.split('.').map(Number);
 if (major < 18) {
-  console.error('Error: ai-cli requires Node.js 18 or higher (current: %s).', process.version);
+  console.error('Error: vexra requires Node.js 18 or higher (current: %s).', process.version);
   process.exit(1);
 }
 
@@ -9,8 +9,8 @@ import { program } from 'commander';
 import { start } from './src/repl.js';
 
 program
-  .name('ai-cli')
-  .description('TUI-based CLI AI assistant with OpenRouter integration')
+  .name('vexra')
+  .description('Terminal-native CLI AI coding assistant with multi-provider support')
   .argument('[prompt]', 'Optional initial prompt (for headless mode)')
   .option('-m, --model <name>', 'OpenRouter model ID')
   .option('-t, --temperature <n>', 'Temperature (0-2)', parseFloat)
