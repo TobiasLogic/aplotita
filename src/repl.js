@@ -10,7 +10,7 @@ import { VexraIndexer } from './indexer/index.js';
 import { setIndexer, getIndexer } from './indexer/instance.js';
 import { getProjectConfigOverrides, getSystemPrompt, buildInitialMessages, warnMentions } from './prompt.js';
 import { loadHistory } from './history.js';
-import { printBanner, printSessionStats } from './render.js';
+import { printBanner, printSessionStats, printWordmark, promptLine } from './render.js';
 import { runProviderSetup } from './setup.js';
 import { createSession } from './session.js';
 import { dispatchCommand } from './commands.js';
@@ -51,9 +51,12 @@ export async function start(userOpts = {}) {
   async function goodbye() {
     if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
     printSessionStats(ctx.stats);
+    console.log();
+    printWordmark();
+    console.log();
     cleanupMcpServers();
     getIndexer()?.close();
-    await fadeTransition('Goodbye.', { color: [54, 208, 208], direction: 'out' });
+    await fadeTransition('  until next time', { color: [180, 100, 255], direction: 'out' });
     process.exit(0);
   }
   ctx.goodbye = goodbye;
@@ -133,11 +136,7 @@ export async function start(userOpts = {}) {
     const inputPrompt = new TextPrompt({
       render() {
         if (this.value === undefined) this.value = '';
-        const indicatorColor = ctx.mode === 'architect' ? '#FF5555' : ctx.mode === 'ask' ? '#5555FF' : '#36D0D0';
-        const indicator = chalk.bold.hex(indicatorColor)(`[${ctx.mode.toUpperCase()}]`);
-        const prefix = chalk.hex('#48E080')('◆');
-        const title = `${prefix} ${indicator} Ask something (Tab to switch mode), or /help ...\n`;
-        return title + chalk.dim('│  ') + this.valueWithCursor;
+        return promptLine(ctx.mode) + '\n' + chalk.hex('#48E080')('❯') + ' ' + this.valueWithCursor;
       }
     });
 
