@@ -10,7 +10,7 @@ import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { getMcpToolDefinitions, isMcpTool, executeMcpTool } from './mcp.js';
 import {
   createLoader, createStreamWriter, renderGradientSeparator,
-  boxOutput, buildCommandOutput, buildContextOutput, extractShBlocks,
+  boxOutput, buildCommandOutput, buildContextOutput, extractShBlocks, printActionRequest,
 } from './render.js';
 import {
   accumulateToolCalls, assistantMessageWithToolCalls, truncateMessagesOnError,
@@ -52,26 +52,25 @@ export function createSession(ctx) {
     const reason = isDangerousCommand(cmd);
     if (!alwaysAsk && !reason) return true;
 
-    const message = reason
-      ? chalk.yellow(`⚠ ${reason} - run? `) + chalk.bold.hex('#36D0D0')(cmd)
-      : `${chalk.bold('Run command?')} ${chalk.hex('#36D0D0')(cmd)}`;
+    printActionRequest(reason
+      ? { verb: 'RUN', target: cmd, hex: '#FF5555', danger: true, note: reason }
+      : { verb: 'SHELL', target: cmd, hex: '#36D0D0' });
 
-    const ok = await p.confirm({ message, initialValue: !reason });
+    const ok = await p.confirm({ message: reason ? 'Run this command anyway?' : 'Run this command?', initialValue: !reason });
     if (p.isCancel(ok)) return false;
     return ok;
   }
 
   async function confirmToolUse(toolName, args) {
     if (ctx.opts.headless) return true;
-    const label = chalk.hex('#36D0D0')(toolName);
     if (toolName === 'write_file') {
-      console.log(chalk.dim(`\n  Tool: `) + label + chalk.dim(` → ${args.path}`));
+      printActionRequest({ verb: 'WRITE', target: args.path, hex: '#48E080' });
       const ok = await p.confirm({ message: 'Write this file?', initialValue: true });
       if (p.isCancel(ok)) return false;
       return ok;
     }
     if (toolName === 'edit_file') {
-      console.log(chalk.dim(`\n  Tool: `) + label + chalk.dim(` → ${args.path}`));
+      printActionRequest({ verb: 'EDIT', target: args.path, hex: '#E0C048' });
       try {
         const oldContent = readFileSync(resolve(process.cwd(), args.path), 'utf-8');
         const diff = diffForLineEdit(oldContent, args.start_line, args.end_line, args.content);
@@ -82,7 +81,8 @@ export function createSession(ctx) {
       return ok;
     }
     if (toolName === 'multi_edit_file') {
-      console.log(chalk.dim(`\n  Tool: `) + label + chalk.dim(` → ${args.path} (${args.edits?.length || 0} edits)`));
+      const n = args.edits?.length || 0;
+      printActionRequest({ verb: 'EDIT', target: args.path, hex: '#E0C048', note: `${n} edit${n === 1 ? '' : 's'}` });
       try {
         const oldContent = readFileSync(resolve(process.cwd(), args.path), 'utf-8');
         for (const edit of args.edits || []) {
@@ -242,7 +242,7 @@ export function createSession(ctx) {
         onResult: (m) => ctx.messages.push(m),
         onLog: ({ name, result, rejected }) => {
           if (rejected) {
-            console.log(chalk.dim('  Skipped.\n'));
+            console.log(chalk.dim('  ⨯ skipped\n'));
             return;
           }
           if (result.success || result.content || result.entries || result.output) {
@@ -253,9 +253,9 @@ export function createSession(ctx) {
               : result.output
               ? result.output.slice(0, 200)
               : JSON.stringify(result);
-            console.log(chalk.dim(`  ${name} → `) + chalk.green('ok') + chalk.dim(` ${summary.slice(0, 80)}`));
+            console.log(chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`));
           } else if (result.error) {
-            console.log(chalk.dim(`  ${name} → `) + chalk.red(result.error));
+            console.log(chalk.red('  ✗ ') + chalk.bold(name) + chalk.dim(` ${result.error}`));
           }
         },
       });
