@@ -8,6 +8,8 @@ export const PROVIDERS = [
     keyUrl: 'https://openrouter.ai/keys',
     defaultModel: 'openai/gpt-4o',
     supportsModelsEndpoint: true,
+    supportsCacheControl: true,
+    supportsRoutingField: true,
   },
   {
     id: 'openai',
@@ -93,6 +95,23 @@ export const PROVIDERS = [
 
 export function getProvider(id) {
   return PROVIDERS.find(p => p.id === id) || null;
+}
+
+export function detectProviderId(providerId, baseUrl) {
+  if (providerId) return providerId;
+  const url = String(baseUrl || '');
+  const match = PROVIDERS.find(p => p.id !== 'custom' && p.baseUrl && url.startsWith(p.baseUrl));
+  return match ? match.id : 'custom';
+}
+
+export function providerSupportsCacheControl(id) {
+  const provider = getProvider(id);
+  return Boolean(provider && provider.supportsCacheControl);
+}
+
+export function providerSupportsRoutingField(id) {
+  const provider = getProvider(id);
+  return Boolean(provider && provider.supportsRoutingField);
 }
 
 export function getProviderChoices() {

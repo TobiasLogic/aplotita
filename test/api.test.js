@@ -237,16 +237,18 @@ describe('streamChat request building', () => {
     });
   });
 
-  it('applies cache_control to the system message and the last cacheable message', async () => {
+  const conversation = () => ([
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'u1' },
+    { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'u2' },
+    { role: 'assistant', content: 'a2' },
+  ]);
+
+  it('applies cache_control for OpenRouter (system + last cacheable message)', async () => {
     const calls = captureFetch();
-    const msgs = [
-      { role: 'system', content: 'sys' },
-      { role: 'user', content: 'u1' },
-      { role: 'assistant', content: 'a1' },
-      { role: 'user', content: 'u2' },
-      { role: 'assistant', content: 'a2' },
-    ];
-    await collect(streamChat(msgs, { apiKey: 'k' }));
+    const msgs = conversation();
+    await collect(streamChat(msgs, { apiKey: 'k', provider: 'openrouter' }));
     const body = calls[0].body;
     expect(Array.isArray(body.messages[0].content)).toBe(true);
     expect(body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
@@ -255,6 +257,36 @@ describe('streamChat request building', () => {
     expect(typeof body.messages[1].content).toBe('string');
     expect(typeof body.messages[4].content).toBe('string');
     expect(typeof msgs[0].content).toBe('string');
+  });
+
+  it('infers OpenRouter from the default base URL and still applies cache_control', async () => {
+    const calls = captureFetch();
+    await collect(streamChat(conversation(), { apiKey: 'k' }));
+    expect(Array.isArray(calls[0].body.messages[0].content)).toBe(true);
+  });
+
+  it('does NOT apply cache_control for OpenAI-compatible providers that may reject it', async () => {
+    for (const opts of [
+      { apiKey: 'k', provider: 'openai', baseUrl: 'https://api.openai.com/v1' },
+      { apiKey: 'k', provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1' },
+      { apiKey: 'k', baseUrl: 'https://my-llm.example/v1' },
+    ]) {
+      const calls = captureFetch();
+      await collect(streamChat(conversation(), opts));
+      const body = calls[0].body;
+      expect(body.messages.every((m) => typeof m.content === 'string')).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('cache_control');
+    }
+  });
+
+  it('sends the OpenRouter routing field only for OpenRouter', async () => {
+    let calls = captureFetch();
+    await collect(streamChat(conversation(), { apiKey: 'k', provider: 'openrouter' }));
+    expect(calls[0].body.provider).toEqual({ allow_fallbacks: false });
+
+    calls = captureFetch();
+    await collect(streamChat(conversation(), { apiKey: 'k', provider: 'openai', baseUrl: 'https://api.openai.com/v1' }));
+    expect(calls[0].body.provider).toBeUndefined();
   });
 
   it('sends referer and title headers only when provided', async () => {
