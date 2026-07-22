@@ -18,7 +18,9 @@ import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { unifiedDiff, diffForEdit, diffForLineEdit } from './diff.js';
 import { resolveMentions } from './context.js';
 import { createPasteState, feedPasteKey, insertPaste } from './paste.js';
-import { fetchModels, formatModelList } from './models.js';
+import { fetchModels, formatModelList, cachedContextLength } from './models.js';
+import { estimateTokens, estimateMessagesTokens } from './tokens.js';
+import { compactMessages } from './compaction.js';
 import { listSessions, saveSession, loadSession, deleteSession, sessionExists } from './sessions.js';
 import { PROVIDERS, getProvider, getProviderChoices } from './providers.js';
 import { initMcpServers, cleanupMcpServers, getMcpToolDefinitions, isMcpTool, executeMcpTool } from './mcp.js';
@@ -26,8 +28,8 @@ import { generateCodeMap } from './codemap.js';
 import { VexraIndexer } from './indexer/index.js';
 import { setIndexer, getIndexer } from './indexer/instance.js';
 
-const MAX_HISTORY_MESSAGES = 40;
 const HISTORY_FILE = join(CONFIG_DIR, 'history.json');
+const DEFAULT_CONTEXT_WINDOW = 128000;
 const MAX_AGENT_LOOPS = 10;
 export let currentMode = 'build';
 
@@ -303,46 +305,6 @@ function buildContextOutput(result) {
   return output.trim() || '(no output)';
 }
 
-async function pruneHistory(messages, opts) {
-  const CHUNK_SIZE = 10;
-  if (messages.length <= MAX_HISTORY_MESSAGES) return;
-
-  const sysMsg = messages[0];
-  let splitIdx = CHUNK_SIZE + 1;
-  while (splitIdx < messages.length && messages[splitIdx].role === 'tool') {
-    splitIdx++;
-  }
-  const evicted = messages.slice(1, splitIdx);
-  const kept = messages.slice(splitIdx);
-
-  process.stderr.write(chalk.dim(`\n[ai-cli] History reached limit. Summarizing ${evicted.length} oldest messages in background...\n`));
-
-  try {
-    const summaryPrompt = [
-      { role: 'system', content: 'You are a highly efficient assistant. Summarize the following conversation log concisely, capturing all important context, decisions, and facts. Output ONLY the summary.' },
-      { role: 'user', content: JSON.stringify(evicted) }
-    ];
-
-    let summaryText = '';
-    for await (const chunk of streamChat(summaryPrompt, { ...opts, temperature: 0.3 })) {
-      if (chunk.content) summaryText += chunk.content;
-    }
-
-    messages.length = 0;
-    messages.push(sysMsg);
-    messages.push({
-      role: 'assistant',
-      content: `[System Note: The following is a summary of the earliest parts of our conversation.]\n\n${summaryText.trim()}`
-    });
-    messages.push(...kept);
-    process.stderr.write(chalk.dim(`[ai-cli] Summary generated and injected. (${summaryText.length} chars)\n`));
-  } catch (err) {
-    process.stderr.write(chalk.dim(`[ai-cli] Summarization failed, hard-dropping messages instead. (${err.message})\n`));
-    messages.length = 0;
-    messages.push(sysMsg, ...kept);
-  }
-}
-
 function saveHistory(messages) {
   try {
     mkdirSync(CONFIG_DIR, { recursive: true });
@@ -442,6 +404,7 @@ const COMMANDS = [
   ['/save [file]', 'Export the conversation to a markdown file'],
   ['/retry', 'Regenerate the last response'],
   ['/reset', 'Clear the conversation and start fresh'],
+  ['/compact', 'Summarize older history to free up context'],
   ['/resume', 'Reload the previous saved session'],
   ['/session <cmd>', 'Named sessions: list, save <name>, load <name>, delete <name>'],
   ['/editor', 'Open $EDITOR for multi-line input'],
@@ -675,6 +638,8 @@ export async function start(userOpts = {}) {
   // Retrieval is folded into the system prompt per turn (see refreshRetrieval).
   let indexer = null;
   let retrievalBlock = '';
+  let lastPromptTokens = null;
+  let lastPromptLen = null;
   if (config.indexer?.enabled && !opts.headless) {
     try {
       indexer = new VexraIndexer({
@@ -824,10 +789,12 @@ export async function start(userOpts = {}) {
     process.once('SIGINT', onSigint);
     isStreaming = true;
 
+    let sentLen = messages.length;
     try {
       const outgoing = retrievalBlock && messages[0]?.role === 'system'
         ? [{ ...messages[0], content: messages[0].content + retrievalBlock }, ...messages.slice(1)]
         : messages;
+      sentLen = outgoing.length;
       for await (const chunk of streamChat(outgoing, streamOpts)) {
         if (chunk._type === 'usage') {
           turnUsage = chunk;
@@ -884,6 +851,8 @@ export async function start(userOpts = {}) {
       sessionTokenUsage.prompt += turnUsage.promptTokens;
       sessionTokenUsage.completion += turnUsage.completionTokens;
       sessionTokenUsage.total += turnUsage.totalTokens;
+      lastPromptTokens = turnUsage.promptTokens;
+      lastPromptLen = sentLen;
       console.log(chalk.dim(`  ${turnUsage.promptTokens} prompt · ${turnUsage.completionTokens} completion · ${turnUsage.totalTokens} total tokens`));
     }
 
@@ -962,7 +931,7 @@ export async function start(userOpts = {}) {
       executedSh = true;
     }
 
-    await pruneHistory(messages, opts);
+    await runCompaction({ force: false });
     saveHistory(messages);
 
     if (executedSh) return 'continue';
@@ -983,6 +952,54 @@ export async function start(userOpts = {}) {
     } catch {
       retrievalBlock = '';
     }
+  }
+
+  function resolveContextWindow() {
+    const fromModel = cachedContextLength(opts.model);
+    if (fromModel && fromModel > 0) return fromModel;
+    return opts.context_window || DEFAULT_CONTEXT_WINDOW;
+  }
+
+  function currentContextTokens() {
+    if (lastPromptTokens != null && lastPromptLen != null && lastPromptLen <= messages.length) {
+      return lastPromptTokens + estimateMessagesTokens(messages.slice(lastPromptLen));
+    }
+    return estimateMessagesTokens(messages) + estimateTokens(retrievalBlock);
+  }
+
+  async function summarizeMessages(evicted) {
+    const summaryPrompt = [
+      { role: 'system', content: 'You are a highly efficient assistant. Summarize the following conversation log concisely, capturing all important context, decisions, facts, file paths, and any open tasks. Output ONLY the summary.' },
+      { role: 'user', content: JSON.stringify(evicted) },
+    ];
+    let summaryText = '';
+    for await (const chunk of streamChat(summaryPrompt, { ...opts, temperature: 0.3, tools: null })) {
+      if (chunk.content) summaryText += chunk.content;
+    }
+    return summaryText;
+  }
+
+  async function runCompaction({ force = false } = {}) {
+    const window = resolveContextWindow();
+    const result = await compactMessages(messages, {
+      window,
+      highWatermark: opts.compact_high_watermark ?? 0.75,
+      lowWatermark: opts.compact_low_watermark ?? 0.5,
+      force,
+      currentTokens: currentContextTokens(),
+      summarize: summarizeMessages,
+      log: (m) => process.stderr.write(chalk.dim(`\n[vexra] ${m}\n`)),
+    });
+    if (result.compacted) {
+      lastPromptTokens = null;
+      lastPromptLen = null;
+      if (result.reason === 'dropped') {
+        process.stderr.write(chalk.dim(`[vexra] Summarization failed; dropped ${result.evicted} old message(s). (${result.error})\n`));
+      } else {
+        process.stderr.write(chalk.dim(`[vexra] Compacted ${result.evicted} message(s) into a summary. (~${result.tokens} tokens)\n`));
+      }
+    }
+    return result;
   }
 
   async function agentLoop({ truncateOnError, maxLoops = MAX_AGENT_LOOPS }) {
@@ -1128,12 +1145,26 @@ export async function start(userOpts = {}) {
         case 'reset':
           messages = buildInitialMessages();
           lastUserPromptIdx = null;
+          lastPromptTokens = null;
+          lastPromptLen = null;
           sessionTokenUsage = { prompt: 0, completion: 0, total: 0 };
           sessionMessageCount = 0;
           sessionStartTime = Date.now();
           saveHistory(messages);
           p.log.success('Conversation reset.');
           break;
+
+        case 'compact': {
+          const before = currentContextTokens();
+          const result = await runCompaction({ force: true });
+          if (result.compacted) {
+            saveHistory(messages);
+            p.log.success(`Compacted conversation: ~${before} → ~${result.tokens} tokens.`);
+          } else {
+            p.log.info('Nothing to compact yet.');
+          }
+          break;
+        }
 
         case 'resume': {
           const loaded = loadHistory();
@@ -1242,6 +1273,11 @@ export async function start(userOpts = {}) {
         case 'history': {
           const count = messages.filter(m => m.role !== 'system').length;
           p.log.info(`${count} message(s) in context. Autosaved to ${HISTORY_FILE}`);
+          const window = resolveContextWindow();
+          const current = currentContextTokens();
+          const pct = window > 0 ? Math.round((current / window) * 100) : 0;
+          const source = lastPromptTokens != null ? 'measured' : 'estimated';
+          console.log(chalk.dim(`  Context: ~${current} / ${window} tokens (${pct}% of window, ${source})`));
           if (sessionTokenUsage.total > 0) {
             console.log(chalk.dim(`  Session tokens: ${sessionTokenUsage.prompt} prompt + ${sessionTokenUsage.completion} completion = ${sessionTokenUsage.total} total`));
           }

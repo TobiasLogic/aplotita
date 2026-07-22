@@ -103,6 +103,9 @@ export const config = {
   maxTokens: resolveInt(process.env.OPENROUTER_MAX_TOKENS, fileCfg.maxTokens, DEFAULTS.maxTokens, 1),
   referer: resolveString(process.env.OPENROUTER_REFERER, fileCfg.referer, DEFAULTS.referer),
   title: resolveString(process.env.OPENROUTER_TITLE, fileCfg.title, DEFAULTS.title),
+  context_window: resolveInt(process.env.VEXRA_CONTEXT_WINDOW, fileCfg.context_window, 128000, 1),
+  compact_high_watermark: resolveFloat(process.env.VEXRA_COMPACT_HIGH, fileCfg.compact_high_watermark, 0.75, 0.1, 0.95),
+  compact_low_watermark: resolveFloat(process.env.VEXRA_COMPACT_LOW, fileCfg.compact_low_watermark, 0.5, 0.05, 0.9),
   mcpServers: fileCfg.mcpServers && typeof fileCfg.mcpServers === 'object' ? fileCfg.mcpServers : {},
   indexer: {
     ...INDEXER_DEFAULTS,
