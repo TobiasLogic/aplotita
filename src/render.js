@@ -126,7 +126,8 @@ export function renderMarkdownLine(line) {
   return renderInline(line);
 }
 
-export function createStreamWriter() {
+export function createStreamWriter(sink) {
+  const out = sink || ((s) => process.stdout.write(s));
   let buffer = '';
   let inCode = false;
   let codeLang = '';
@@ -136,7 +137,7 @@ export function createStreamWriter() {
     const fence = line.match(/^\s*```(.*)$/);
     if (inCode) {
       if (fence) {
-        process.stdout.write(formatFencedBlock(codeLines.join('\n'), codeLang));
+        out(formatFencedBlock(codeLines.join('\n'), codeLang));
         inCode = false;
         codeLang = '';
         codeLines = [];
@@ -151,7 +152,7 @@ export function createStreamWriter() {
       codeLines = [];
       return;
     }
-    process.stdout.write(renderMarkdownLine(line) + '\n');
+    out(renderMarkdownLine(line) + '\n');
   }
 
   function write(raw) {
@@ -172,13 +173,21 @@ export function createStreamWriter() {
       else handleLine(last);
     }
     if (inCode) {
-      process.stdout.write(formatFencedBlock(codeLines.join('\n'), codeLang));
+      out(formatFencedBlock(codeLines.join('\n'), codeLang));
       inCode = false;
       codeLines = [];
     }
   };
 
   return write;
+}
+
+export function renderMarkdownToString(text) {
+  let out = '';
+  const w = createStreamWriter((s) => { out += s; });
+  w(text);
+  w.end();
+  return out.replace(/\n$/, '');
 }
 
 export function boxOutput(label, content) {
@@ -276,12 +285,16 @@ export const COMMANDS = [
   ['/exit', 'Quit (or press Ctrl+C)'],
 ];
 
-export function printHelp() {
-  console.log();
-  console.log('  ' + chalk.bold('Commands'));
+export function formatHelp() {
+  const lines = ['', '  ' + chalk.bold('Commands')];
   for (const [c, d] of COMMANDS) {
-    console.log('  ' + chalk.hex('#36D0D0')(c.padEnd(20)) + chalk.gray(d));
+    lines.push('  ' + chalk.hex('#36D0D0')(c.padEnd(20)) + chalk.gray(d));
   }
+  return lines.join('\n');
+}
+
+export function printHelp() {
+  console.log(formatHelp());
   console.log();
 }
 

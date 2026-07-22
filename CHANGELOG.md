@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Full-screen TUI.** Interactive sessions now run in a persistent
+  [Ink](https://github.com/vadimdemedes/ink) (React) interface: a scrolling
+  conversation view, a fixed input box with a live status bar (mode · model ·
+  tokens), a streaming assistant region, and inline **approval overlays** that
+  show the diff for every file edit and confirm shell commands without leaving
+  the app. `Tab` cycles the mode, `Ctrl+C` interrupts a running turn (or exits
+  when idle), and `/models` and the `ask_question` tool open list overlays.
+
+### Changed
+- All rendering now flows through a single UI controller with two backends:
+  the Ink TUI for interactive terminals, and the original scrolling output for
+  **headless (`--headless`) and piped/non-TTY** runs, which are unchanged.
+- **Node.js 22+ is now required** (Ink's minimum). The startup guard and
+  `package.json` engines were bumped from 18 to 22.
+
 ## 2.0.0 — 2026-07-22
 
 Major release. The project is renamed to **aplótita** and gains token-aware
