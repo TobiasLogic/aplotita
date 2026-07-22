@@ -210,6 +210,16 @@ export function buildContextOutput(result) {
   return output.trim() || '(no output)';
 }
 
+export function printActionRequest({ verb, target, hex, note, danger = false }) {
+  const badge = danger
+    ? chalk.bold.white.bgHex(hex)(` ${verb} `)
+    : chalk.bold.black.bgHex(hex)(` ${verb} `);
+  const mark = chalk.hex('#48E080')('◈');
+  let line = `\n  ${mark} ${chalk.dim('aplótita wants to')} ${badge}  ${chalk.bold.white(target)}`;
+  if (note) line += chalk.dim(`  · ${note}`);
+  console.log(line);
+}
+
 export function renderGradientSeparator(width = 58) {
   let out = '';
   for (let i = 0; i < width; i++) {
