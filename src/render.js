@@ -3,8 +3,10 @@ import boxen from 'boxen';
 import { highlight } from 'cli-highlight';
 import { writeFileSync } from 'fs';
 import {
-  shimmerText, createShimmer, createSpinner, createPulse, createParticles, createMatrix,
+  createShimmer, createSpinner, createPulse, createParticles, createMatrix,
 } from './shimmer.js';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export const LOADER_STYLES = ['braille', 'dots', 'arc', 'circle', 'square', 'line', 'grow', 'shimmer', 'pulse', 'particles', 'matrix'];
 
@@ -283,28 +285,81 @@ export function printSessionStats(stats) {
   console.log();
 }
 
+const WORDMARK = [
+  '╔═╗  ╔═╗  ╦    ╔═╗  ╔╦╗  ╦  ╔╦╗  ╔═╗',
+  '╠═╣  ╠═╝  ║    ║ ║   ║   ║   ║   ╠═╣',
+  '╩ ╩  ╩    ╩═╝  ╚═╝   ╩   ╩   ╩   ╩ ╩',
+];
+
+function gradientRgb(t) {
+  return [
+    Math.round(54 + (180 - 54) * t),
+    Math.round(208 + (100 - 208) * t),
+    Math.round(208 + (255 - 208) * t),
+  ];
+}
+
+function styleWordmarkLine(line, sweep) {
+  const w = Math.max(line.length, 1);
+  let out = '';
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === ' ') { out += ' '; continue; }
+    const t = i / w;
+    let [r, g, b] = gradientRgb(t);
+    if (sweep != null) {
+      const boost = Math.max(0, 1 - Math.abs(t - sweep) * 6);
+      r = Math.min(255, Math.round(r + (255 - r) * boost));
+      g = Math.min(255, Math.round(g + (255 - g) * boost));
+      b = Math.min(255, Math.round(b + (255 - b) * boost));
+    }
+    out += chalk.rgb(r, g, b)(ch);
+  }
+  return out;
+}
+
+function wordmarkFrame(sweep) {
+  return WORDMARK.map((l) => '  ' + styleWordmarkLine(l, sweep)).join('\n');
+}
+
+export function printWordmark() {
+  console.log(wordmarkFrame(null));
+}
+
+async function animateWordmark({ frames = 16, intervalMs = 55 } = {}) {
+  if (!process.stdout.isTTY) { printWordmark(); return; }
+  process.stdout.write('\x1b[?25l');
+  for (let f = 0; f <= frames; f++) {
+    const sweep = -0.2 + (1.4 * f) / frames;
+    if (f > 0) process.stdout.write('\x1b[3A');
+    process.stdout.write('\r' + wordmarkFrame(sweep) + '\n');
+    await sleep(intervalMs);
+  }
+  process.stdout.write('\x1b[?25h');
+}
+
+export function inlineWordmark(text = 'aplótita') {
+  const chars = [...text];
+  const w = Math.max(chars.length, 1);
+  return chars.map((ch, i) => {
+    const [r, g, b] = gradientRgb(i / w);
+    return chalk.bold.rgb(r, g, b)(ch);
+  }).join('');
+}
+
+export function promptLine(mode) {
+  const chipColor = mode === 'architect' ? '#FF5555' : mode === 'ask' ? '#5555FF' : '#36D0D0';
+  const chip = chalk.bold.black.bgHex(chipColor)(` ${mode.toUpperCase()} `);
+  return `${chalk.hex('#48E080')('◇')} ${inlineWordmark('aplótita')}  ${chip}${chalk.dim('  Tab: mode · /help')}`;
+}
+
 export async function printBanner(opts) {
-  const cols = Math.min(process.stdout.columns || 60, 60);
-  const innerW = cols - 2;
   console.log();
-  console.log(chalk.dim('╭' + '─'.repeat(innerW) + '╮'));
-  await shimmerText('aplótita', {
-    prefix: chalk.dim('│') + '  ',
-    suffix: chalk.dim(' - TUI AI Assistant'),
-  });
-  console.log(
-    chalk.dim('│') +
-    '  ' + chalk.gray(`Model: ${opts.model}`)
-  );
-  console.log(
-    chalk.dim('│') +
-    '  ' + chalk.gray(`Temp: ${opts.temperature}   Max tokens: ${opts.maxTokens}`)
-  );
-  console.log(
-    chalk.dim('│') +
-    '  ' + chalk.gray('Type ') + chalk.hex('#36D0D0')('/help') +
-    chalk.gray(' for commands  ·  Ctrl+C to exit')
-  );
-  console.log(chalk.dim('╰' + '─'.repeat(innerW) + '╯'));
+  await animateWordmark();
+  console.log('  ' + chalk.dim('the simple terminal AI coding assistant'));
+  console.log();
+  console.log('  ' + chalk.gray('model  ') + chalk.white(opts.model));
+  console.log('  ' + chalk.gray(`temp ${opts.temperature}   max tokens ${opts.maxTokens}`));
+  console.log('  ' + chalk.gray('type ') + chalk.hex('#36D0D0')('/help') + chalk.gray(' for commands · Ctrl+C to exit'));
   console.log();
 }
