@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import chalk from 'chalk';
 import { html } from '../html.js';
+import { accent } from '../theme.js';
 
 const MODES = ['build', 'architect', 'ask'];
 const nextMode = (m) => MODES[(MODES.indexOf(m) + 1) % MODES.length];
@@ -43,12 +44,12 @@ export function Input({ mode, disabled, onSubmit, onModeChange }) {
     }
   }, { isActive: !disabled });
 
-  const marker = disabled ? chalk.dim('❯') : chalk.hex('#48E080')('❯');
+  const marker = disabled ? chalk.dim('❯') : chalk.hex(accent())('❯');
   const body = disabled
     ? chalk.dim('…')
     : (value.length || cursor ? withCursor(value, cursor) : chalk.inverse(' '));
 
-  return html`<${Box} borderStyle="round" borderColor=${disabled ? 'gray' : '#36D0D0'} paddingX=${1}>
+  return html`<${Box} borderStyle="round" borderColor=${disabled ? 'gray' : accent()} paddingX=${1}>
     <${Text}>${marker} ${body}</${Text}>
   </${Box}>`;
 }

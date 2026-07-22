@@ -259,6 +259,7 @@ export const COMMANDS = [
   ['/temp [n]', 'Show or set temperature (0-2)'],
   ['/tokens [n]', 'Show or set max output tokens'],
   ['/mode [type]', 'Switch role: build, architect, ask'],
+  ['/theme', 'Pick an accent color'],
   ['/auto <prompt>', 'Run an autonomous agent loop'],
   ['/loader [style]', 'Show or set loader animation (braille, dots, arc, pulse, shimmer, ...)'],
   ['/save [file]', 'Export the conversation to a markdown file'],

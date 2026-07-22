@@ -10,6 +10,7 @@ import { listSessions, saveSession, loadSession, deleteSession } from './session
 import { getSystemPrompt, buildInitialMessages, warnMentions } from './prompt.js';
 import { saveHistory, loadHistory, HISTORY_FILE } from './history.js';
 import { createLoader, LOADER_STYLES, exportMarkdown } from './render.js';
+import { themeOptions, setTheme } from './ui/theme.js';
 import {
   createSpinner, createShimmer, createPulse, createGradientBar, createParticles, createMatrix,
   typewriter, fadeTransition, progressBar, animateCountUp,
@@ -140,6 +141,14 @@ export async function dispatchCommand(ctx, name, arg) {
         ui.setStatus(null);
         ui.log('error', `Failed to fetch models: ${err.message}`);
       }
+      break;
+    }
+
+    case 'theme': {
+      const selected = await ui.requestSelect({ message: 'Choose an accent', options: themeOptions() });
+      if (selected == null) break;
+      const t = setTheme(selected);
+      ui.log('success', `Theme → ${chalk.bold.hex(t.accent)(t.label)}`);
       break;
     }
 
