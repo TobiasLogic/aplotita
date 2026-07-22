@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- **Accent themes.** `/theme` opens a picker with named accent colors — Aplótita
+  Teal, Night Blue, Desert Red, Rust Orange, Pear Green — applied live to the
+  input border, prompt marker, and spinner.
 - **Full-screen TUI.** Interactive sessions now run in a persistent
   [Ink](https://github.com/vadimdemedes/ink) (React) interface: a scrolling
   conversation view, a fixed input box with a live status bar (mode · model ·
