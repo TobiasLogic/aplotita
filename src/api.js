@@ -91,6 +91,8 @@ export function parseSSELine(line) {
   }
 }
 
+import { detectProviderId, providerSupportsCacheControl, providerSupportsRoutingField } from './providers.js';
+
 function withCacheControl(msg) {
   const clone = { ...msg };
   if (typeof clone.content === 'string') {
@@ -116,7 +118,11 @@ export async function* streamChat(messages, opts = {}) {
     title,
     maxRetries = 3,
     tools = null,
+    provider,
   } = opts;
+
+  const providerId = detectProviderId(provider, baseUrl);
+  const useCacheControl = providerSupportsCacheControl(providerId);
 
   const headers = {
     'Authorization': `Bearer ${apiKey}`,
@@ -132,22 +138,24 @@ export async function* streamChat(messages, opts = {}) {
     max_tokens: maxTokens,
     stream: true,
     stream_options: { include_usage: true },
-    // OpenRouter prompt caching
-    provider: {
-      allow_fallbacks: false
-    }
   };
+
+  if (providerSupportsRoutingField(providerId)) {
+    body.provider = { allow_fallbacks: false };
+  }
 
   if (messages.length > 0) {
     body.messages = messages.map(msg => ({ ...msg }));
 
-    if (body.messages[0].role === 'system') {
-      body.messages[0] = withCacheControl(body.messages[0]);
-    }
+    if (useCacheControl) {
+      if (body.messages[0].role === 'system') {
+        body.messages[0] = withCacheControl(body.messages[0]);
+      }
 
-    const lastCacheableIndex = body.messages.length - 3;
-    if (lastCacheableIndex > 0) {
-      body.messages[lastCacheableIndex] = withCacheControl(body.messages[lastCacheableIndex]);
+      const lastCacheableIndex = body.messages.length - 3;
+      if (lastCacheableIndex > 0) {
+        body.messages[lastCacheableIndex] = withCacheControl(body.messages[lastCacheableIndex]);
+      }
     }
   }
 
@@ -170,11 +178,11 @@ export async function* streamChat(messages, opts = {}) {
     } catch {
       errBody = await res.text();
     }
-    throw new Error(`OpenRouter API error (${res.status}): ${errBody}`);
+    throw new Error(`API request failed (${res.status}): ${errBody}`);
   }
 
   if (!res.body) {
-    throw new Error('OpenRouter returned an empty response body.');
+    throw new Error('The API returned an empty response body.');
   }
 
   const reader = res.body.getReader();
@@ -197,7 +205,7 @@ export async function* streamChat(messages, opts = {}) {
         else if (r.type === 'usage') yield { ...r.value, _type: 'usage' };
         else if (r.type === 'error') {
           parseErrorCount++;
-          process.stderr.write(`\n[ai-cli: warn] malformed SSE chunk received\n`);
+          process.stderr.write(`\n[vexra: warn] malformed SSE chunk received\n`);
         }
       }
 
@@ -212,7 +220,7 @@ export async function* streamChat(messages, opts = {}) {
   } finally {
     try { await reader.cancel(); } catch {}
     if (parseErrorCount > 0) {
-      process.stderr.write(`\n[ai-cli: warn] ${parseErrorCount} malformed SSE chunk(s) were dropped from the response.\n`);
+      process.stderr.write(`\n[vexra: warn] ${parseErrorCount} malformed SSE chunk(s) were dropped from the response.\n`);
     }
     reader.releaseLock();
   }
