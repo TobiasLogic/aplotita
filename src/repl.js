@@ -365,6 +365,10 @@ function buildInitialMessages() {
   return [{ role: 'system', content: getSystemPrompt() }];
 }
 
+function warnMentions(warnings) {
+  for (const w of warnings || []) p.log.warn(w);
+}
+
 function exportMarkdown(messages, file) {
   const lines = ['# ai-cli conversation', '', `Exported ${new Date().toISOString()}`, ''];
   for (const m of messages) {
@@ -988,7 +992,8 @@ export async function start(userOpts = {}) {
 
   if (initialPrompt) {
     messages[0].content = getSystemPrompt();
-    const { text, context, images } = resolveMentions(initialPrompt);
+    const { text, context, images, warnings } = resolveMentions(initialPrompt, { model: opts.model });
+    warnMentions(warnings);
     const userMsg = { role: 'user', content: context ? `${text}\n${context}` : text };
     if (images.length > 0) userMsg.content = [{ type: 'text', text: userMsg.content }, ...images];
     messages.push(userMsg);
@@ -1106,7 +1111,8 @@ export async function start(userOpts = {}) {
           const prevHeadless = opts.headless;
           opts.headless = true;
           messages[0].content = getSystemPrompt();
-          const { text, context, images } = resolveMentions(arg);
+          const { text, context, images, warnings } = resolveMentions(arg, { model: opts.model });
+          warnMentions(warnings);
           const userMsg = { role: 'user', content: context ? `${text}\n${context}` : text };
           if (images.length > 0) userMsg.content = [{ type: 'text', text: userMsg.content }, ...images];
           messages.push(userMsg);
@@ -1269,8 +1275,9 @@ export async function start(userOpts = {}) {
               console.log(chalk.dim(`  Got ${content.length} chars from editor.`));
               lastUserPromptIdx = messages.length;
               sessionMessageCount++;
-              const { text: cleanText, context, images } = resolveMentions(content);
-              
+              const { text: cleanText, context, images, warnings } = resolveMentions(content, { model: opts.model });
+              warnMentions(warnings);
+
               let messageContent;
               if (images && images.length > 0) {
                 messageContent = [
@@ -1444,8 +1451,9 @@ export async function start(userOpts = {}) {
 
     lastUserPromptIdx = messages.length;
     sessionMessageCount++;
-    const { text: cleanText, context, images } = resolveMentions(trimmed);
-    
+    const { text: cleanText, context, images, warnings } = resolveMentions(trimmed, { model: opts.model });
+    warnMentions(warnings);
+
     let messageContent;
     if (images && images.length > 0) {
       messageContent = [
