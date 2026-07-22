@@ -4,7 +4,11 @@ import { fileURLToPath } from 'url';
 import { runCommand, runCommandArgs, spawnBackgroundTask, spawnBackgroundTaskArgs, BACKGROUND_TASKS } from './executor.js';
 import { invalidateCodeMap } from './codemap.js';
 import { getIndexer } from './indexer/instance.js';
-import * as p from '@clack/prompts';
+import { createStdoutController } from './ui/stdout-adapter.js';
+
+let _ui = null;
+export function setToolUI(ui) { _ui = ui; }
+function toolUI() { return _ui || (_ui = createStdoutController()); }
 
 const MAX_READ_SIZE = 100 * 1024;
 const MAX_OUTPUT_SIZE = 50 * 1024;
@@ -489,25 +493,14 @@ async function execManageWorkspace(args) {
 }
 
 async function execAskQuestion(args) {
+  const ui = toolUI();
   try {
     const answers = [];
     for (const q of args.questions) {
-      if (q.is_multi_select) {
-        const selected = await p.multiselect({
-          message: q.question,
-          options: q.options.map(opt => ({ value: opt, label: opt })),
-          required: false
-        });
-        if (p.isCancel(selected)) return { error: 'User cancelled the question.' };
-        answers.push({ question: q.question, answer: selected });
-      } else {
-        const selected = await p.select({
-          message: q.question,
-          options: q.options.map(opt => ({ value: opt, label: opt }))
-        });
-        if (p.isCancel(selected)) return { error: 'User cancelled the question.' };
-        answers.push({ question: q.question, answer: selected });
-      }
+      const options = q.options.map(opt => ({ value: opt, label: opt }));
+      const selected = await ui.requestSelect({ message: q.question, options, multi: !!q.is_multi_select });
+      if (selected == null) return { error: 'User cancelled the question.' };
+      answers.push({ question: q.question, answer: selected });
     }
     return { success: true, answers };
   } catch (err) {

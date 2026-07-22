@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { generateCodeMap } from './codemap.js';
@@ -72,8 +71,8 @@ export function buildInitialMessages(mode = 'build') {
   return [{ role: 'system', content: getSystemPrompt(mode) }];
 }
 
-export function warnMentions(warnings) {
-  for (const w of warnings || []) p.log.warn(w);
+export function warnMentions(warnings, ui) {
+  for (const w of warnings || []) ui.log('warn', w);
 }
 
 export function recentUserText(msgs, n = 3) {

@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@clack/core": "0.4.2",
@@ -25,9 +25,13 @@
     "cli-highlight": "^2.1.11",
     "commander": "^13.1.0",
     "dotenv": "^16.5.0",
+    "htm": "^3.1.1",
+    "ink": "^7.1.1",
+    "react": "^19.2.8",
     "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
+    "ink-testing-library": "^4.0.0",
     "vitest": "^4.1.9"
   }
 }

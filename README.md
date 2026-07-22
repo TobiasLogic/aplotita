@@ -3,13 +3,14 @@
 **The simple terminal AI coding assistant**
 
 ![aplotita](https://img.shields.io/badge/apl%C3%B3tita-simplicity-36D0D0?style=for-the-badge)
-![Node](https://img.shields.io/badge/node-%3E%3D18-48E080?style=for-the-badge&logo=node.js&logoColor=white)
+![Node](https://img.shields.io/badge/node-%3E%3D22-48E080?style=for-the-badge&logo=node.js&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS_·_Linux_·_Windows-5555FF?style=for-the-badge)
 
 aplótita is a terminal-native AI coding assistant that lives inside your workflow. It maps your
 codebase, runs tools, edits files, executes commands, and can drive long autonomous tasks, all
-from a fast, animated TUI. Bring your own model from OpenRouter, OpenAI, Anthropic, Gemini,
-Groq, DeepSeek, xAI, or a local Ollama.
+from a fast, full-screen TUI — a scrolling conversation view, a persistent input box and status
+bar, streaming markdown, and inline approval overlays for every file edit and command. Bring your
+own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, or a local Ollama.
 
 ---
 
@@ -66,8 +67,9 @@ Groq, DeepSeek, xAI, or a local Ollama.
 
 ## Requirements
 
-- **Node.js 18 or newer.** Semantic code indexing uses the built-in `node:sqlite` (Node 22.5+);
-  on older versions the indexer self-disables and the rest of aplótita works normally.
+- **Node.js 22 or newer.** The full-screen TUI is built on [Ink](https://github.com/vadimdemedes/ink)
+  (React), which requires Node 22+. Semantic code indexing uses the built-in `node:sqlite`
+  (Node 22.5+); on 22.0–22.4 the indexer self-disables and the rest of aplótita works normally.
 - An API key from a [supported provider](#supported-providers), or a local
   [Ollama](https://ollama.com) install (no key needed). Without one, the index falls back to
   keyword search.
