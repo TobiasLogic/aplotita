@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { parseSSELine, parseRetryAfter, backoffMs, fetchWithRetry } from '../src/api.js';
+import { parseSSELine, parseRetryAfter, backoffMs, fetchWithRetry, streamChat } from '../src/api.js';
 
 describe('parseSSELine', () => {
   it('skips empty lines', () => {
@@ -179,5 +179,125 @@ describe('fetchWithRetry', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(fetchWithRetry('http://x', {}, { maxRetries: 3 })).rejects.toThrow('Aborted');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('streamChat request building', () => {
+  function streamResponse(lines) {
+    const encoder = new TextEncoder();
+    const chunks = lines.map((l) => encoder.encode(l + '\n'));
+    let i = 0;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: {
+        getReader() {
+          return {
+            read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }),
+            cancel: async () => {},
+            releaseLock() {},
+          };
+        },
+      },
+    };
+  }
+
+  async function collect(gen) {
+    const out = [];
+    for await (const c of gen) out.push(c);
+    return out;
+  }
+
+  function captureFetch(lines = ['data: [DONE]']) {
+    const calls = [];
+    const mock = vi.fn(async (url, options) => {
+      calls.push({ url, options, body: JSON.parse(options.body) });
+      return streamResponse(lines);
+    });
+    vi.stubGlobal('fetch', mock);
+    return calls;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('posts an OpenAI-style chat completion to the base URL', async () => {
+    const calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'hi' }], {
+      apiKey: 'k', baseUrl: 'https://api.test/v1', model: 'm1', temperature: 0.5, maxTokens: 123,
+    }));
+    expect(calls[0].url).toBe('https://api.test/v1/chat/completions');
+    expect(calls[0].options.headers.Authorization).toBe('Bearer k');
+    expect(calls[0].body).toMatchObject({
+      model: 'm1', temperature: 0.5, max_tokens: 123, stream: true,
+      stream_options: { include_usage: true },
+    });
+  });
+
+  it('applies cache_control to the system message and the last cacheable message', async () => {
+    const calls = captureFetch();
+    const msgs = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+    ];
+    await collect(streamChat(msgs, { apiKey: 'k' }));
+    const body = calls[0].body;
+    expect(Array.isArray(body.messages[0].content)).toBe(true);
+    expect(body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(Array.isArray(body.messages[2].content)).toBe(true);
+    expect(body.messages[2].content.at(-1).cache_control).toEqual({ type: 'ephemeral' });
+    expect(typeof body.messages[1].content).toBe('string');
+    expect(typeof body.messages[4].content).toBe('string');
+    expect(typeof msgs[0].content).toBe('string');
+  });
+
+  it('sends referer and title headers only when provided', async () => {
+    let calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k', referer: 'https://vexra', title: 'vexra' }));
+    expect(calls[0].options.headers['HTTP-Referer']).toBe('https://vexra');
+    expect(calls[0].options.headers['X-Title']).toBe('vexra');
+
+    calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k' }));
+    expect(calls[0].options.headers['HTTP-Referer']).toBeUndefined();
+    expect(calls[0].options.headers['X-Title']).toBeUndefined();
+  });
+
+  it('includes tools when provided and omits the key otherwise', async () => {
+    const tools = [{ type: 'function', function: { name: 'f', parameters: {} } }];
+    let calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k', tools }));
+    expect(calls[0].body.tools).toEqual(tools);
+
+    calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k' }));
+    expect(calls[0].body.tools).toBeUndefined();
+  });
+
+  it('yields content deltas and a usage event from the stream', async () => {
+    captureFetch([
+      'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+      'data: {"choices":[{"delta":{"content":"lo"}}]}',
+      'data: {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}',
+      'data: [DONE]',
+    ]);
+    const chunks = await collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k' }));
+    expect(chunks.filter((c) => c.content).map((c) => c.content).join('')).toBe('Hello');
+    expect(chunks.find((c) => c._type === 'usage')).toMatchObject({ promptTokens: 5, completionTokens: 2, totalTokens: 7 });
+  });
+
+  it('throws a descriptive error on a non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 400, headers: { get: () => null },
+      json: async () => ({ error: { message: 'bad field' } }),
+      text: async () => 'bad field',
+    })));
+    await expect(collect(streamChat([{ role: 'user', content: 'x' }], { apiKey: 'k', maxRetries: 0 }))).rejects.toThrow(/400.*bad field/);
   });
 });
