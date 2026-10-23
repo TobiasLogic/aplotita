@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync } from 'fs';
 import { resolve, relative, join, sep } from 'path';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 import { fileURLToPath } from 'url';
-import { runCommand, runCommandArgs, spawnBackgroundTask, spawnBackgroundTaskArgs, BACKGROUND_TASKS } from './executor.js';
+import { runCommand, runCommandArgs, spawnBackgroundTask, spawnBackgroundTaskArgs, BACKGROUND_TASKS, killTree } from './executor.js';
 import { invalidateCodeMap } from './codemap.js';
 import { getIndexer } from './indexer/instance.js';
 import { createStdoutController } from './ui/stdout-adapter.js';
@@ -12,6 +14,9 @@ function toolUI() { return _ui || (_ui = createStdoutController()); }
 
 const MAX_READ_SIZE = 100 * 1024;
 const MAX_OUTPUT_SIZE = 50 * 1024;
+const MAX_FETCH_BYTES = 5 * 1024 * 1024;
+const DEFAULT_SHELL_TIMEOUT_S = 120;
+const MAX_SHELL_TIMEOUT_S = 600;
 
 // Keep the semantic index fresh after an agent edit. Fire-and-forget: indexing
 // must never block or fail a tool call. The hash check inside updateFile dedupes
@@ -72,14 +77,14 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'multi_edit_file',
-      description: 'Edit a file by replacing multiple specific line ranges with new content. Useful for non-contiguous edits.',
+      description: 'Edit a file by replacing several non-overlapping line ranges in one call. Line numbers refer to the file before any of the edits are applied.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File path (relative or absolute)' },
           edits: {
             type: 'array',
-            description: 'List of edits to apply. Edits must be sorted in descending order of line numbers to avoid offset issues.',
+            description: 'Edits to apply. Ranges must not overlap; they can be given in any order.',
             items: {
               type: 'object',
               properties: {
@@ -118,6 +123,7 @@ export const TOOL_DEFINITIONS = [
         type: 'object',
         properties: {
           command: { type: 'string', description: 'The shell command to execute' },
+          timeout_seconds: { type: 'number', description: `Optional timeout in seconds (default ${DEFAULT_SHELL_TIMEOUT_S}, max ${MAX_SHELL_TIMEOUT_S})` },
         },
         required: ['command'],
       },
@@ -241,7 +247,7 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'grep_search',
-      description: 'Search for a pattern in files using grep (or ripgrep if available).',
+      description: 'Search file contents for a regular expression using ripgrep (falls back to git grep or grep). Respects .gitignore when ripgrep or git is available.',
       parameters: {
         type: 'object',
         properties: {
@@ -271,13 +277,58 @@ function truncateOutput(text, maxLen = MAX_OUTPUT_SIZE) {
 }
 
 async function checkSyntax(fullPath) {
-  if (fullPath.endsWith('.js') || fullPath.endsWith('.mjs') || fullPath.endsWith('.cjs')) {
+  if (/\.(m|c)?js$/.test(fullPath)) {
     try {
-      const result = await runCommand(`node --check "${fullPath}"`);
-      if (result.exitCode !== 0) return `Syntax error introduced:\n${result.stderr}`;
-    } catch (err) {}
+      const result = await runCommandArgs(process.execPath, ['--check', fullPath]);
+      if (result.exitCode !== 0) return `The file was saved, but node --check reports a syntax error:\n${result.stderr}`;
+    } catch {}
   }
   return null;
+}
+
+function afterWrite(fullPath) {
+  invalidateCodeMap();
+  refreshIndex(fullPath);
+}
+
+function isLineNumber(n) {
+  return Number.isInteger(n) && n >= 0;
+}
+
+export function planLineEdits(lineCount, edits) {
+  if (!Array.isArray(edits) || edits.length === 0) return { error: 'edits must be a non-empty array' };
+  for (const e of edits) {
+    if (!e || typeof e.content !== 'string' || !isLineNumber(e.start_line) || !isLineNumber(e.end_line)) {
+      return { error: 'Each edit needs integer start_line and end_line and a string content' };
+    }
+    const start = e.start_line - 1;
+    if (start < 0 || start > lineCount || e.end_line < start || e.end_line > lineCount) {
+      return { error: `Invalid line range: ${e.start_line} to ${e.end_line} (file has ${lineCount} lines)` };
+    }
+  }
+  const sorted = [...edits].sort((a, b) => a.start_line - b.start_line);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const cur = sorted[i];
+    if (cur.start_line <= prev.end_line || cur.start_line === prev.start_line) {
+      return { error: `Edits overlap: lines ${prev.start_line}-${prev.end_line} and ${cur.start_line}-${cur.end_line}. Merge them into one edit.` };
+    }
+  }
+  return { ordered: sorted.reverse() };
+}
+
+function applyLineEdits(lines, ordered) {
+  let replaced = 0;
+  let added = 0;
+  for (const edit of ordered) {
+    const start = edit.start_line - 1;
+    const newLines = edit.content.split('\n');
+    if (newLines[newLines.length - 1] === '') newLines.pop();
+    lines.splice(start, edit.end_line - start, ...newLines);
+    replaced += edit.end_line - start;
+    added += newLines.length;
+  }
+  return { replaced, added };
 }
 
 async function execReadFile(args) {
@@ -303,13 +354,12 @@ async function execWriteFile(args) {
   if (!isInsideCwd(fullPath)) {
     return { error: `Refusing to write outside the project directory: ${args.path}. Use run_shell if you really need this.` };
   }
+  if (typeof args.content !== 'string') return { error: 'content must be a string' };
   try {
     writeFileSync(fullPath, args.content, 'utf-8');
-    invalidateCodeMap();
-    refreshIndex(fullPath);
-    const syntaxError = await checkSyntax(fullPath);
-    if (syntaxError) return { error: syntaxError };
-    return { success: true, path: args.path, bytes: args.content.length };
+    afterWrite(fullPath);
+    const warning = await checkSyntax(fullPath);
+    return { success: true, path: args.path, bytes: Buffer.byteLength(args.content), ...(warning ? { warning } : {}) };
   } catch (err) {
     return { error: `Failed to write ${args.path}: ${err.message}` };
   }
@@ -323,20 +373,13 @@ async function execEditFile(args) {
   if (!existsSync(fullPath)) return { error: `File not found: ${args.path}` };
   try {
     const lines = readFileSync(fullPath, 'utf-8').split('\n');
-    const start = args.start_line - 1;
-    const end = args.end_line;
-    if (start < 0 || start >= lines.length || end < start) {
-      return { error: `Invalid line range: 1-indexed ${args.start_line} to ${args.end_line}` };
-    }
-    const newLines = args.content.split('\n');
-    if (newLines[newLines.length - 1] === '') newLines.pop();
-    lines.splice(start, end - start, ...newLines);
+    const plan = planLineEdits(lines.length, [{ start_line: args.start_line, end_line: args.end_line, content: args.content }]);
+    if (plan.error) return { error: plan.error };
+    const { replaced, added } = applyLineEdits(lines, plan.ordered);
     writeFileSync(fullPath, lines.join('\n'), 'utf-8');
-    invalidateCodeMap();
-    refreshIndex(fullPath);
-    const syntaxError = await checkSyntax(fullPath);
-    if (syntaxError) return { error: syntaxError };
-    return { success: true, path: args.path, linesReplaced: end - start, linesAdded: newLines.length };
+    afterWrite(fullPath);
+    const warning = await checkSyntax(fullPath);
+    return { success: true, path: args.path, linesReplaced: replaced, linesAdded: added, ...(warning ? { warning } : {}) };
   } catch (err) {
     return { error: `Failed to edit ${args.path}: ${err.message}` };
   }
@@ -350,34 +393,13 @@ async function execMultiEditFile(args) {
   if (!existsSync(fullPath)) return { error: `File not found: ${args.path}` };
   try {
     const lines = readFileSync(fullPath, 'utf-8').split('\n');
-
-    // Sort edits in descending order of start_line to avoid index shifting issues
-    const sortedEdits = [...args.edits].sort((a, b) => b.start_line - a.start_line);
-    
-    let totalLinesReplaced = 0;
-    let totalLinesAdded = 0;
-
-    for (const edit of sortedEdits) {
-      const start = edit.start_line - 1;
-      const end = edit.end_line;
-      if (start < 0 || start >= lines.length || end < start) {
-        return { error: `Invalid line range: 1-indexed ${edit.start_line} to ${edit.end_line}` };
-      }
-      const newLines = edit.content.split('\n');
-      if (newLines[newLines.length - 1] === '') newLines.pop();
-      lines.splice(start, end - start, ...newLines);
-      
-      totalLinesReplaced += (end - start);
-      totalLinesAdded += newLines.length;
-    }
-
+    const plan = planLineEdits(lines.length, args.edits);
+    if (plan.error) return { error: plan.error };
+    const { replaced, added } = applyLineEdits(lines, plan.ordered);
     writeFileSync(fullPath, lines.join('\n'), 'utf-8');
-    invalidateCodeMap();
-    refreshIndex(fullPath);
-    const syntaxError = await checkSyntax(fullPath);
-    if (syntaxError) return { error: syntaxError };
-
-    return { success: true, path: args.path, editsApplied: sortedEdits.length, linesReplaced: totalLinesReplaced, linesAdded: totalLinesAdded };
+    afterWrite(fullPath);
+    const warning = await checkSyntax(fullPath);
+    return { success: true, path: args.path, editsApplied: plan.ordered.length, linesReplaced: replaced, linesAdded: added, ...(warning ? { warning } : {}) };
   } catch (err) {
     return { error: `Failed to multi-edit ${args.path}: ${err.message}` };
   }
@@ -401,16 +423,25 @@ async function execListDir(args) {
   }
 }
 
-async function execRunShell(args) {
+function shellTimeoutMs(seconds) {
+  const n = Number(seconds);
+  const s = Number.isFinite(n) && n > 0 ? Math.min(n, MAX_SHELL_TIMEOUT_S) : DEFAULT_SHELL_TIMEOUT_S;
+  return Math.round(s * 1000);
+}
+
+async function execRunShell(args, { signal } = {}) {
+  const timeout = shellTimeoutMs(args.timeout_seconds);
   try {
-    const result = await runCommand(args.command);
+    const result = await runCommand(args.command, { timeout, signal });
     invalidateCodeMap();
     let output = '';
     if (result.stdout) output += result.stdout;
     if (result.stderr) output += (output ? '\n' : '') + `[stderr] ${result.stderr}`;
-    if (result.exitCode !== 0) output += `\n[exit code: ${result.exitCode}]`;
+    if (result.killedByTimeout) output += `\n[timed out after ${timeout / 1000}s; pass a larger timeout_seconds or use spawn_background_task]`;
+    else if (result.exitCode !== 0) output += `\n[exit code: ${result.exitCode}]`;
     return { output: truncateOutput(output || '(no output)') };
   } catch (err) {
+    if (err.name === 'AbortError') return { error: 'Interrupted by the user.' };
     return { error: `Command failed: ${err.message}` };
   }
 }
@@ -451,7 +482,7 @@ async function execManageTask(args) {
   
   if (args.action === 'kill') {
     if (task.status === 'running') {
-      task.child.kill();
+      killTree(task.child);
       task.status = 'killed';
       return { success: true, message: `Sent kill signal to task ${task.id}` };
     }
@@ -471,24 +502,36 @@ async function execInvokeSubagent(args) {
   }
 }
 
+function gitFailure(res) {
+  return { error: `git worktree failed: ${res.stderr || res.stdout || `exit code ${res.exitCode}`}` };
+}
+
 async function execManageWorkspace(args) {
   try {
     if (args.action === 'create') {
-      if (!args.path || !args.branch) return { error: 'path and branch required for create' };
-      await runCommand(`git worktree add -b ${args.branch} ${args.path}`);
+      if (typeof args.path !== 'string' || typeof args.branch !== 'string' || !args.path || !args.branch) {
+        return { error: 'path and branch are required for create' };
+      }
+      if (args.path.startsWith('-') || args.branch.startsWith('-')) return { error: 'path and branch must not start with "-"' };
+      const res = await runCommandArgs('git', ['worktree', 'add', '-b', args.branch, '--', args.path]);
+      if (res.exitCode !== 0) return gitFailure(res);
       return { success: true, message: `Created new worktree at ${args.path} on branch ${args.branch}` };
     }
     if (args.action === 'list') {
-      const res = await runCommand(`git worktree list`);
+      const res = await runCommandArgs('git', ['worktree', 'list']);
+      if (res.exitCode !== 0) return gitFailure(res);
       return { output: res.stdout };
     }
     if (args.action === 'remove') {
-      if (!args.path) return { error: 'path required for remove' };
-      await runCommand(`git worktree remove -f ${args.path}`);
+      if (typeof args.path !== 'string' || !args.path) return { error: 'path is required for remove' };
+      if (args.path.startsWith('-')) return { error: 'path must not start with "-"' };
+      const res = await runCommandArgs('git', ['worktree', 'remove', '--', args.path]);
+      if (res.exitCode !== 0) return gitFailure(res);
       return { success: true, message: `Removed worktree at ${args.path}` };
     }
+    return { error: `Unknown action: ${args.action}` };
   } catch (err) {
-    return { error: `Git worktree failed: ${err.message}` };
+    return { error: `git worktree failed: ${err.message}` };
   }
 }
 
@@ -508,11 +551,21 @@ async function execAskQuestion(args) {
   }
 }
 
-function isBlockedHost(hostname) {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host === '::1' || host === '0.0.0.0') return true;
+export function isBlockedHost(hostname) {
+  let host = String(hostname).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const mapped = host.match(/^::ffff:(.+)$/);
+  if (mapped) {
+    const tail = mapped[1];
+    const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    host = hex
+      ? [parseInt(hex[1], 16) >> 8, parseInt(hex[1], 16) & 255, parseInt(hex[2], 16) >> 8, parseInt(hex[2], 16) & 255].join('.')
+      : tail;
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '::') return true;
   if (host === 'metadata.google.internal') return true;
+  if (/^0\./.test(host)) return true;
   if (/^127\./.test(host)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
   if (/^10\./.test(host)) return true;
   if (/^192\.168\./.test(host)) return true;
   if (/^169\.254\./.test(host)) return true;
@@ -522,15 +575,47 @@ function isBlockedHost(hostname) {
   return false;
 }
 
+async function assertPublicHost(hostname) {
+  const blocked = () => {
+    const e = new Error('refusing to fetch a private, loopback, or link-local address');
+    e.blocked = true;
+    return e;
+  };
+  if (isBlockedHost(hostname)) throw blocked();
+  const bare = hostname.replace(/^\[|\]$/g, '');
+  if (isIP(bare)) return;
+  let addresses;
+  try {
+    addresses = await lookup(bare, { all: true });
+  } catch {
+    return;
+  }
+  if (addresses.some((a) => isBlockedHost(a.address))) throw blocked();
+}
+
+async function readCapped(res, limit) {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+    if (size >= limit) {
+      try { await reader.cancel(); } catch {}
+      break;
+    }
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, limit));
+}
+
 async function fetchFollow(startUrl, headers, maxHops = 5) {
   let url = startUrl;
   for (let hop = 0; hop < maxHops; hop++) {
-    if (isBlockedHost(url.hostname)) {
-      const e = new Error('refusing to fetch a private, loopback, or link-local address');
-      e.blocked = true;
-      throw e;
-    }
-    const res = await fetch(url, { headers, redirect: 'manual' });
+    await assertPublicHost(url.hostname);
+    const res = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(30000) });
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location');
       if (!loc) return res;
@@ -556,7 +641,7 @@ async function execWebFetch(args) {
     const res = await fetchFollow(url, { 'User-Agent': 'aplotita (+https://github.com/TobiasLogic/aplotita)' });
     if (!res.ok) return { error: `HTTP ${res.status}: ${res.statusText}` };
     const contentType = res.headers.get('content-type') || '';
-    const raw = await res.text();
+    const raw = await readCapped(res, MAX_FETCH_BYTES);
     if (/html|xml/.test(contentType)) {
       try {
         const { load } = await import('cheerio');
@@ -599,17 +684,20 @@ async function execGrepSearch(args) {
     return { error: 'pattern is required' };
   }
   const dir = resolvePath(args.path || '.');
+  if (!isInsideCwd(dir)) {
+    return { error: `Refusing to search outside the project directory: ${args.path}. Use run_shell if you really need this.` };
+  }
+  const target = relative(process.cwd(), dir) || '.';
   const attempts = [
-    ['rg', ['-n', '--', pattern, dir]],
-    ['git', ['grep', '-n', '-I', '-e', pattern]],
-    ['grep', ['-rn', '--', pattern, dir]],
+    ['rg', ['-n', '--no-heading', '--color', 'never', '-e', pattern, '--', target]],
+    ['git', ['grep', '-n', '-I', '-E', '-e', pattern, '--', target]],
+    ['grep', ['-rnIE', '--exclude-dir=node_modules', '--exclude-dir=.git', '-e', pattern, '--', target]],
   ];
   for (const [file, argv] of attempts) {
     try {
       const result = await runCommandArgs(file, argv);
-      if (result.exitCode === 0) {
-        return { output: truncateOutput(result.stdout || '(no matches found)') };
-      }
+      if (result.exitCode === 0) return { output: truncateOutput(result.stdout || '(no matches found)') };
+      if (result.exitCode === 1) return { output: '(no matches found)' };
     } catch {
       continue;
     }
@@ -635,10 +723,10 @@ const EXECUTORS = {
   grep_search: execGrepSearch,
 };
 
-export async function executeTool(name, args) {
+export async function executeTool(name, args, opts = {}) {
   const executor = EXECUTORS[name];
   if (!executor) return { error: `Unknown tool: ${name}` };
-  return executor(args);
+  return executor(args || {}, opts);
 }
 
 export function getToolNames() {
