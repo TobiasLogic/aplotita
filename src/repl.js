@@ -133,7 +133,8 @@ export async function start(userOpts = {}) {
       ctx.indexer.index()
         .then((stats) => {
           if (ctx.isStreaming) return;
-          const mode = stats.vecEnabled && stats.embedded ? 'semantic' : 'keyword';
+          const semantic = stats.embedded > 0 || (stats.chunks === 0 && ctx.indexer?.vectorSearch);
+          const mode = semantic ? 'semantic' : 'keyword';
           ctx.ui.log('message', chalk.dim(`index ready · ${stats.files} files · ${stats.chunks} chunks · ${mode} search`));
         })
         .catch(() => {});

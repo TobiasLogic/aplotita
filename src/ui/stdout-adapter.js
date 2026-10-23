@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import chalk from 'chalk';
 import {
   createLoader, createStreamWriter, renderGradientSeparator,
-  boxOutput, buildCommandOutput, printActionRequest,
+  boxOutput, buildCommandOutput, printActionRequest, formatToolLine, formatUsage,
   printBanner, printHelp, printSessionStats, printWordmark,
 } from '../render.js';
 
@@ -41,8 +41,8 @@ export function createStdoutController(ctx = {}) {
       }
     },
 
-    usage({ prompt, completion, total }) {
-      console.log(chalk.dim(`  ${prompt} prompt · ${completion} completion · ${total} total tokens`));
+    usage(u) {
+      console.log(chalk.dim(formatUsage(u)));
     },
 
     separator() {
@@ -75,24 +75,8 @@ export function createStdoutController(ctx = {}) {
       }
     },
 
-    toolResult({ name, result, rejected, reason }) {
-      if (rejected) {
-        console.log(chalk.dim(reason ? `  ⨯ ${name} blocked: ${reason}\n` : '  ⨯ skipped\n'));
-        return;
-      }
-      if (result.success || result.content || result.entries || result.output) {
-        const summary = result.content
-          ? result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '')
-          : result.entries
-          ? result.entries.slice(0, 200)
-          : result.output
-          ? result.output.slice(0, 200)
-          : JSON.stringify(result);
-        const warn = result.warning ? chalk.yellow('  ▲ saved with a syntax error') : '';
-        console.log(chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`) + warn);
-      } else if (result.error) {
-        console.log(chalk.red('  ✗ ') + chalk.bold(name) + chalk.dim(` ${result.error}`));
-      }
+    toolResult(entry) {
+      console.log(formatToolLine(entry));
     },
 
     shellStart(cmd) {

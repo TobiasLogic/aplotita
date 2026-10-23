@@ -56,14 +56,149 @@ const LANG_MAP = {
   yml: 'yaml', md: 'markdown',
 };
 
-export function extractShBlocks(text) {
-  const regex = /```(?:sh|bash|shell|zsh)\r?\n([\s\S]*?)\r?\n```/g;
-  const blocks = [];
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    blocks.push(match[1].trim());
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+export function visibleLength(text) {
+  return [...String(text).replace(ANSI_RE, '')].length;
+}
+
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_SEPARATOR_CELL = /^:?-+:?$/;
+
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+}
+
+export function renderTable(lines) {
+  const rows = lines.map(splitTableRow);
+  const sepIdx = rows.findIndex((r) => r.length > 0 && r.every((c) => TABLE_SEPARATOR_CELL.test(c)));
+  const align = sepIdx >= 0 ? rows[sepIdx].map((c) => (c.endsWith(':') && !c.startsWith(':') ? 'right' : 'left')) : [];
+  const hasHeader = sepIdx === 1;
+  const cols = Math.max(...rows.map((r) => r.length));
+  const cells = rows
+    .filter((_, i) => i !== sepIdx)
+    .map((r, i) => Array.from({ length: cols }, (_, c) => {
+      const text = renderInline(r[c] ?? '');
+      return hasHeader && i === 0 ? chalk.bold(text) : text;
+    }));
+  const widths = Array.from({ length: cols }, (_, c) => Math.max(...cells.map((r) => visibleLength(r[c]))));
+  const pad = (text, width, side) => {
+    const gap = ' '.repeat(Math.max(0, width - visibleLength(text)));
+    return side === 'right' ? gap + text : text + gap;
+  };
+  const line = (r) => ('  ' + r.map((c, i) => pad(c, widths[i], align[i])).join('   ')).replace(/\s+$/, '');
+  const out = cells.map(line);
+  if (hasHeader) out.splice(1, 0, chalk.dim('  ' + widths.map((w) => '─'.repeat(w)).join('   ')));
+  return out.join('\n') + '\n';
+}
+
+function oneLine(text, max = 70) {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+function lastLine(text) {
+  const lines = String(text ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : '';
+}
+
+function countLines(text) {
+  return String(text ?? '').split('\n').filter((l) => l.trim()).length;
+}
+
+function toolTarget(name, args = {}) {
+  switch (name) {
+    case 'read_file':
+    case 'write_file':
+    case 'edit_file':
+      return args.path;
+    case 'multi_edit_file':
+      return `${args.path} (${Array.isArray(args.edits) ? args.edits.length : 0} edits)`;
+    case 'list_dir':
+      return args.path || '.';
+    case 'run_shell':
+    case 'spawn_background_task':
+      return `$ ${args.command ?? ''}`;
+    case 'grep_search':
+      return `${args.pattern ?? ''}${args.path ? ` in ${args.path}` : ''}`;
+    case 'web_fetch':
+      return args.url;
+    case 'invoke_subagent':
+      return args.prompt;
+    case 'manage_task':
+    case 'manage_workspace':
+      return [args.action, args.task_id, args.path, args.branch].filter(Boolean).join(' ');
+    case 'ask_question':
+      return Array.isArray(args.questions) ? args.questions.map((q) => q?.question).join(' / ') : '';
+    case 'git_status':
+    case 'git_diff':
+      return '';
+    default:
+      return args && Object.keys(args).length ? JSON.stringify(args) : '';
   }
-  return blocks;
+}
+
+function toolOutcome(name, result = {}) {
+  switch (name) {
+    case 'ask_question':
+      return Array.isArray(result.answers)
+        ? '→ ' + result.answers.map((a) => (Array.isArray(a.answer) ? a.answer.join(', ') : a.answer)).join(' / ')
+        : '';
+    case 'write_file':
+      return result.bytes != null ? `${result.bytes} bytes` : '';
+    case 'edit_file':
+    case 'multi_edit_file':
+      return result.linesAdded != null ? `-${result.linesReplaced} +${result.linesAdded} lines` : '';
+    case 'read_file':
+      return typeof result.content === 'string' ? `${result.content.split('\n').length} lines` : '';
+    case 'list_dir':
+    case 'grep_search':
+    case 'git_status':
+    case 'git_diff': {
+      const text = String(result.output ?? result.entries ?? '');
+      return /^\(no /.test(text) ? text : `${countLines(text)} lines`;
+    }
+    case 'spawn_background_task':
+      return result.task_id || '';
+    case 'invoke_subagent':
+      return result.conversation_id || '';
+    case 'web_fetch':
+      return typeof result.content === 'string' ? `${result.content.length} chars` : '';
+    default:
+      return lastLine(result.output ?? result.content ?? result.entries ?? result.message ?? '');
+  }
+}
+
+export function formatToolLine({ name, args, result = {}, rejected, reason }) {
+  const target = oneLine(toolTarget(name, args || {}), 60);
+  const label = name + (target ? ' ' + target : '');
+  if (rejected) {
+    return chalk.dim(`  ⨯ ${label} · ${reason ? `blocked: ${oneLine(reason, 90)}` : 'skipped'}`);
+  }
+  const head = chalk.bold(name) + (target ? ' ' + chalk.white(target) : '');
+  if (result.error) return chalk.red('  ✗ ') + head + chalk.dim(' · ' + oneLine(result.error, 90));
+  const outcome = oneLine(toolOutcome(name, result), 60);
+  const nonZero = /\[(exit code: \d+|timed out)/.test(String(result.output || ''));
+  const mark = nonZero ? chalk.yellow('  ▲ ') : chalk.green('  ✔ ');
+  const warn = result.warning ? chalk.yellow('  ▲ saved with a syntax error') : '';
+  return mark + head + (outcome ? chalk.dim(' · ' + outcome) : '') + warn;
+}
+
+function compactNumber(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e4) return Math.round(n / 1e3) + 'k';
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(n);
+}
+
+export function formatUsage({ prompt = 0, completion = 0, rounds = 1 }) {
+  const parts = [];
+  if (rounds > 1) parts.push(`${rounds} requests`);
+  parts.push(`${compactNumber(prompt)} in`, `${compactNumber(completion)} out`);
+  return '  ' + parts.join(' · ');
 }
 
 function highlightCode(code, lang) {
@@ -130,9 +265,21 @@ export function createStreamWriter(sink) {
   let inCode = false;
   let codeLang = '';
   let codeLines = [];
+  let tableLines = [];
+
+  function flushTable() {
+    if (tableLines.length === 0) return;
+    out(renderTable(tableLines));
+    tableLines = [];
+  }
 
   function handleLine(line) {
     const fence = line.match(/^\s*```(.*)$/);
+    if (!inCode && !fence && TABLE_ROW.test(line)) {
+      tableLines.push(line);
+      return;
+    }
+    flushTable();
     if (inCode) {
       if (fence) {
         out(formatFencedBlock(codeLines.join('\n'), codeLang));
@@ -170,6 +317,7 @@ export function createStreamWriter(sink) {
       if (inCode) codeLines.push(last);
       else handleLine(last);
     }
+    flushTable();
     if (inCode) {
       out(formatFencedBlock(codeLines.join('\n'), codeLang));
       inCode = false;

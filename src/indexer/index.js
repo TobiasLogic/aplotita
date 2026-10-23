@@ -239,7 +239,7 @@ export class CodeIndexer {
       }
 
       const { embedded } = await this.embedPending();
-      return { ...this.db.stats(), changed, scanned: files.length, embedded };
+      return { ...this.db.stats(), changed, scanned: files.length, embeddedNow: embedded };
     } finally {
       this._indexing = false;
     }
