@@ -79,8 +79,8 @@ export function createInkController() {
       set(R.setStatus(state, label));
     },
 
-    toolResult({ name, result, rejected }) {
-      add({ type: 'tool', name, result, rejected: !!rejected });
+    toolResult({ name, result, rejected, reason }) {
+      add({ type: 'tool', name, result, rejected: !!rejected, reason });
     },
 
     shellStart(cmd) {
@@ -136,6 +136,19 @@ export function createInkController() {
 
     clear() {
       set(R.clearBlocks(state));
+    },
+
+    cancelPending() {
+      const overlay = state.overlay;
+      if (overlay) overlay.resolve(overlay.kind === 'approval' ? false : null);
+    },
+
+    setMode() {
+      set({ ...state });
+    },
+
+    setLoader() {
+      set({ ...state });
     },
 
     // Replaced by the app with a real Ink-pause implementation; default awaits.

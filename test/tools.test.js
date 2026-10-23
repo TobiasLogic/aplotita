@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, unlinkSync } from 'fs';
+import { existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { executeTool } from '../src/tools.js';
+import { tmpdir } from 'os';
+import { executeTool, planLineEdits, isBlockedHost } from '../src/tools.js';
 
 describe('tools.js path containment guards', () => {
   const created = [];
@@ -63,5 +64,94 @@ describe('tools.js grep_search', () => {
     try { if (existsSync(sentinel)) unlinkSync(sentinel); } catch {}
     await executeTool('grep_search', { pattern: `nomatch"; touch ${sentinel}; echo "` });
     expect(existsSync(sentinel)).toBe(false);
+  });
+});
+
+describe('tools.js line edits', () => {
+  const rel = 'aplotita_edit_artifact.txt';
+  const full = join(process.cwd(), rel);
+  afterEach(() => { try { if (existsSync(full)) unlinkSync(full); } catch {} });
+
+  it('applies non-overlapping edits against the original line numbers in any order', async () => {
+    writeFileSync(full, 'a\nb\nc\nd\ne\n');
+    const res = await executeTool('multi_edit_file', { path: rel, edits: [
+      { start_line: 2, end_line: 2, content: 'B' },
+      { start_line: 4, end_line: 5, content: 'D\nE' },
+    ] });
+    expect(res.success).toBe(true);
+    expect(readFileSync(full, 'utf-8')).toBe('a\nB\nc\nD\nE\n');
+  });
+
+  it('rejects overlapping edits and leaves the file untouched', async () => {
+    writeFileSync(full, 'a\nb\nc\nd\ne\n');
+    const res = await executeTool('multi_edit_file', { path: rel, edits: [
+      { start_line: 2, end_line: 4, content: 'X' },
+      { start_line: 3, end_line: 3, content: 'Y' },
+    ] });
+    expect(res.error).toMatch(/overlap/);
+    expect(readFileSync(full, 'utf-8')).toBe('a\nb\nc\nd\ne\n');
+  });
+
+  it('rejects out-of-range edits', async () => {
+    writeFileSync(full, 'a\nb\n');
+    const res = await executeTool('edit_file', { path: rel, start_line: 9, end_line: 9, content: 'x' });
+    expect(res.error).toMatch(/Invalid line range/);
+  });
+
+  it('planLineEdits allows inserts at the end of the file', () => {
+    expect(planLineEdits(3, [{ start_line: 4, end_line: 3, content: 'z' }]).error).toBeUndefined();
+  });
+});
+
+describe('tools.js syntax check', () => {
+  const rel = 'aplotita_syntax_artifact.js';
+  const full = join(process.cwd(), rel);
+  afterEach(() => { try { if (existsSync(full)) unlinkSync(full); } catch {} });
+
+  it('reports a saved file with a syntax problem as success plus a warning', async () => {
+    const res = await executeTool('write_file', { path: rel, content: 'function (' });
+    expect(res.success).toBe(true);
+    expect(res.warning).toMatch(/syntax error/);
+    expect(existsSync(full)).toBe(true);
+  });
+});
+
+describe('tools.js manage_workspace', () => {
+  it('never hands its arguments to a shell', async () => {
+    const sentinel = join(tmpdir(), 'aplotita_worktree_pwned');
+    try { if (existsSync(sentinel)) unlinkSync(sentinel); } catch {}
+    const res = await executeTool('manage_workspace', { action: 'remove', path: `nope; touch ${sentinel}` });
+    expect(res.error).toMatch(/git worktree failed/);
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
+  it('rejects option-like arguments', async () => {
+    const res = await executeTool('manage_workspace', { action: 'create', path: '--force', branch: 'x' });
+    expect(res.error).toMatch(/must not start/);
+  });
+});
+
+describe('tools.js grep_search scope', () => {
+  it('refuses to search outside the project', async () => {
+    expect((await executeTool('grep_search', { pattern: 'root', path: '/etc' })).error).toMatch(/Refusing to search outside/);
+  });
+
+  it('reports no matches without falling through to slower tools', async () => {
+    const res = await executeTool('grep_search', { pattern: 'zz_no_such_token_' + 'anywhere_42', path: 'src' });
+    expect(res.output).toBe('(no matches found)');
+  });
+});
+
+describe('isBlockedHost', () => {
+  it('blocks loopback, private, CGNAT and IPv4-mapped IPv6 addresses', () => {
+    for (const h of ['localhost', 'api.localhost', '127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.0.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '[::1]', '[::ffff:7f00:1]', '::ffff:127.0.0.1', 'fd12:3456::1']) {
+      expect(isBlockedHost(h), h).toBe(true);
+    }
+  });
+
+  it('allows public hosts', () => {
+    for (const h of ['example.com', '93.184.216.34', '[2606:4700::1111]', '100.128.0.1']) {
+      expect(isBlockedHost(h), h).toBe(false);
+    }
   });
 });

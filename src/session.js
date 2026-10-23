@@ -1,9 +1,9 @@
 import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { streamChat } from './api.js';
 import { isDangerousCommand } from './executor.js';
-import { diffForLineEdit } from './diff.js';
+import { diffForLineEdit, unifiedDiff } from './diff.js';
 import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { getMcpToolDefinitions, isMcpTool, executeMcpTool } from './mcp.js';
 import { buildContextOutput, extractShBlocks } from './render.js';
@@ -14,16 +14,18 @@ import {
 import { compactMessages } from './compaction.js';
 import { estimateTokens, estimateMessagesTokens } from './tokens.js';
 import { cachedContextLength } from './models.js';
-import { recentUserText } from './prompt.js';
+import { recentUserText, getSystemPrompt, withRetrieval, warnMentions } from './prompt.js';
+import { resolveMentions } from './context.js';
+import { toolsForMode, modeRestriction } from './permissions.js';
 import { saveHistory } from './history.js';
 import { createStdoutController } from './ui/stdout-adapter.js';
 
-export const MAX_AGENT_LOOPS = 10;
+export const MAX_AGENT_LOOPS = 25;
 export const DEFAULT_CONTEXT_WINDOW = 128000;
 
-function runStreamingCommand(cmd, { onStdout, onStderr } = {}) {
+function runStreamingCommand(cmd, { onStdout, onStderr, signal } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, { shell: true, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, { shell: true, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'], signal });
     let stdout = '', stderr = '';
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString();
@@ -35,61 +37,115 @@ function runStreamingCommand(cmd, { onStdout, onStderr } = {}) {
       stderr += text;
       onStderr?.(text);
     });
-    child.on('error', reject);
-    child.on('close', (code, signal) => {
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code || 0, signal: signal || null, killedByTimeout: false });
+    child.on('error', (err) => {
+      if (err.name === 'AbortError') return;
+      reject(err);
+    });
+    child.on('close', (code, sig) => {
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? (sig ? 1 : 0), signal: sig || null, killedByTimeout: false });
     });
   });
+}
+
+function preview(text, max = 160) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
 export function createSession(ctx) {
   if (!ctx.ui) ctx.ui = createStdoutController(ctx);
   const ui = ctx.ui;
+  if (!ctx.alwaysAllow) ctx.alwaysAllow = new Set();
 
-  async function confirmRun(cmd, { alwaysAsk }) {
-    if (ctx.opts.headless) return true;
+  const canPrompt = () => !ctx.opts.headless;
+  const autoApproving = () => Boolean(ctx.opts.headless || ctx.autoApprove);
+
+  async function ask(kind, payload) {
+    if (autoApproving() || ctx.alwaysAllow.has(kind)) return true;
+    const answer = await ui.requestApproval({ ...payload, allowAlways: true });
+    if (answer === 'always') {
+      ctx.alwaysAllow.add(kind);
+      return true;
+    }
+    return answer === true;
+  }
+
+  async function confirmRun(cmd, { alwaysAsk, verb = 'SHELL', kind = 'shell' } = {}) {
     const reason = isDangerousCommand(cmd);
-    if (!alwaysAsk && !reason) return true;
+    if (reason) {
+      if (!canPrompt()) {
+        return `Blocked: this looks like a ${reason}. Destructive commands never run unattended; tell the user the exact command so they can run it themselves.`;
+      }
+      return ui.requestApproval({ verb: 'RUN', target: cmd, hex: '#FF5555', danger: true, note: reason, message: 'Run this command anyway?', initialValue: false });
+    }
+    if (!alwaysAsk) return true;
+    return ask(kind, { verb, target: cmd, hex: '#36D0D0', message: 'Run this command?', initialValue: true });
+  }
 
-    return ui.requestApproval(reason
-      ? { verb: 'RUN', target: cmd, hex: '#FF5555', danger: true, note: reason, message: 'Run this command anyway?', initialValue: false }
-      : { verb: 'SHELL', target: cmd, hex: '#36D0D0', message: 'Run this command?', initialValue: true });
+  function editDiff(path, edits) {
+    try {
+      const oldContent = readFileSync(resolve(process.cwd(), path), 'utf-8');
+      return edits.map((e) => diffForLineEdit(oldContent, e.start_line, e.end_line, e.content)).join('\n');
+    } catch {
+      return '';
+    }
+  }
+
+  function writeDiff(path, content) {
+    try {
+      const full = resolve(process.cwd(), path);
+      if (!existsSync(full)) return '';
+      const before = readFileSync(full, 'utf-8');
+      const after = String(content ?? '');
+      const oldLines = before.split('\n').length;
+      const newLines = after.split('\n').length;
+      if (oldLines * newLines > 4_000_000) return `(too large to diff: ${oldLines} lines → ${newLines} lines)`;
+      return unifiedDiff(before, after, { oldLabel: path, newLabel: path });
+    } catch {
+      return '';
+    }
   }
 
   async function confirmToolUse(toolName, args) {
-    if (ctx.opts.headless) return true;
-    if (toolName === 'write_file') {
-      return ui.requestApproval({ verb: 'WRITE', target: args.path, hex: '#48E080', message: 'Write this file?', initialValue: true });
+    const restriction = modeRestriction(ctx.mode, toolName, args, isMcpTool);
+    if (restriction) return restriction;
+
+    switch (toolName) {
+      case 'write_file': {
+        const exists = existsSync(resolve(process.cwd(), String(args.path || '')));
+        return ask('write', { verb: exists ? 'OVERWRITE' : 'WRITE', target: args.path, hex: '#48E080', diff: writeDiff(args.path, args.content), message: 'Write this file?', initialValue: true });
+      }
+      case 'edit_file':
+        return ask('write', { verb: 'EDIT', target: args.path, hex: '#E0C048', diff: editDiff(args.path, [args]), message: 'Apply this edit?', initialValue: true });
+      case 'multi_edit_file': {
+        const edits = Array.isArray(args.edits) ? args.edits : [];
+        const n = edits.length;
+        return ask('write', { verb: 'EDIT', target: args.path, hex: '#E0C048', note: `${n} edit${n === 1 ? '' : 's'}`, diff: editDiff(args.path, edits), message: 'Apply these edits?', initialValue: true });
+      }
+      case 'run_shell':
+        return confirmRun(String(args.command || ''), { alwaysAsk: true });
+      case 'spawn_background_task':
+        return confirmRun(String(args.command || ''), { alwaysAsk: true, verb: 'BACKGROUND', kind: 'background' });
+      case 'invoke_subagent':
+        return ask('subagent', { verb: 'SUBAGENT', target: preview(args.prompt), hex: '#B464FF', note: 'runs unattended in the background', message: 'Start this subagent?', initialValue: true });
+      case 'ask_question':
+        if (!canPrompt()) return 'Nobody is available to answer in headless mode. Make a reasonable assumption, say what it was, and continue.';
+        return true;
+      case 'manage_workspace':
+        if (args.action === 'list') return true;
+        return ask('worktree', { verb: 'WORKTREE', target: `${args.action} ${args.path || ''}`.trim(), hex: '#E0C048', note: args.branch ? `branch ${args.branch}` : undefined, message: 'Change git worktrees?', initialValue: true });
+      default:
+        if (isMcpTool(toolName)) {
+          return ask(`mcp:${toolName}`, { verb: 'MCP', target: toolName, hex: '#B464FF', note: preview(JSON.stringify(args), 120), message: 'Call this MCP tool?', initialValue: true });
+        }
+        return true;
     }
-    if (toolName === 'edit_file') {
-      let diff = '';
-      try {
-        const oldContent = readFileSync(resolve(process.cwd(), args.path), 'utf-8');
-        diff = diffForLineEdit(oldContent, args.start_line, args.end_line, args.content);
-      } catch {}
-      return ui.requestApproval({ verb: 'EDIT', target: args.path, hex: '#E0C048', diff, message: 'Apply this edit?', initialValue: true });
-    }
-    if (toolName === 'multi_edit_file') {
-      const n = args.edits?.length || 0;
-      let diff = '';
-      try {
-        const oldContent = readFileSync(resolve(process.cwd(), args.path), 'utf-8');
-        diff = (args.edits || [])
-          .map((edit) => diffForLineEdit(oldContent, edit.start_line, edit.end_line, edit.content))
-          .join('\n');
-      } catch {}
-      return ui.requestApproval({ verb: 'EDIT', target: args.path, hex: '#E0C048', note: `${n} edit${n === 1 ? '' : 's'}`, diff, message: 'Apply these edits?', initialValue: true });
-    }
-    if (toolName === 'run_shell') {
-      return confirmRun(args.command, { alwaysAsk: true });
-    }
-    return true;
   }
 
-  async function runShell(cmd, { fromUser }) {
+  async function runShell(cmd, { fromUser, signal } = {}) {
     if (fromUser) {
       const ok = await confirmRun(cmd, { alwaysAsk: false });
-      if (!ok) {
+      if (ok !== true) {
         ui.log('dim', '  Aborted.\n');
         return;
       }
@@ -103,6 +159,7 @@ export function createSession(ctx) {
       result = await runStreamingCommand(cmd, {
         onStdout: (t) => ui.shellChunk(t, false),
         onStderr: (t) => ui.shellChunk(t, true),
+        signal,
       });
     } catch (err) {
       ui.log('error', 'Failed to start: ' + err.message);
@@ -120,7 +177,7 @@ export function createSession(ctx) {
     if (fromUser) saveHistory(ctx.messages);
   }
 
-  async function streamAssistant({ truncateOnError }) {
+  async function streamAssistant({ signal }) {
     ui.setStatus('Thinking');
 
     let asst = null;
@@ -129,21 +186,13 @@ export function createSession(ctx) {
     let toolCallFragments = [];
     let turnUsage = null;
 
-    const controller = new AbortController();
-    const allTools = [...TOOL_DEFINITIONS, ...getMcpToolDefinitions()];
-    const streamOpts = { ...ctx.opts, signal: controller.signal, tools: allTools };
+    const allTools = toolsForMode(ctx.mode, [...TOOL_DEFINITIONS, ...getMcpToolDefinitions()], isMcpTool);
+    const streamOpts = { ...ctx.opts, signal, tools: allTools, onWarning: (m) => ui.log('warn', m) };
 
-    function onSigint() {
-      controller.abort();
-    }
-    process.once('SIGINT', onSigint);
     ctx.isStreaming = true;
-
     let sentLen = ctx.messages.length;
     try {
-      const outgoing = ctx.retrievalBlock && ctx.messages[0]?.role === 'system'
-        ? [{ ...ctx.messages[0], content: ctx.messages[0].content + ctx.retrievalBlock }, ...ctx.messages.slice(1)]
-        : ctx.messages;
+      const outgoing = withRetrieval(ctx.messages, ctx.retrievalBlock);
       sentLen = outgoing.length;
       for await (const chunk of streamChat(outgoing, streamOpts)) {
         if (chunk._type === 'usage') {
@@ -180,16 +229,15 @@ export function createSession(ctx) {
     } catch (err) {
       ui.setStatus(null);
       if (asst) asst.done();
-      if (err.name === 'AbortError') {
-        ui.log('warn', 'Interrupted.');
-      } else {
+      if (err.name !== 'AbortError' && !signal?.aborted) {
+        ctx.lastTurnFailed = true;
         ui.log('error', err.message);
       }
-      truncateMessagesOnError(ctx.messages, truncateOnError);
+      truncateMessagesOnError(ctx.messages, ctx.turnAnchor);
+      saveHistory(ctx.messages);
       return;
     } finally {
       ui.setStatus(null);
-      process.removeListener('SIGINT', onSigint);
       ctx.isStreaming = false;
     }
 
@@ -221,28 +269,35 @@ export function createSession(ctx) {
         isMcpTool,
         executeMcpTool,
         executeTool,
+        signal,
         onResult: (m) => ctx.messages.push(m),
-        onLog: ({ name, result, rejected }) => ui.toolResult({ name, result, rejected }),
+        onLog: ({ name, result, rejected, reason }) => ui.toolResult({ name, result, rejected, reason }),
       });
 
+      saveHistory(ctx.messages);
+      if (signal?.aborted) return;
+      await runCompaction({ force: false });
       return 'continue';
     }
 
     let executedSh = false;
-    for (const cmd of extractShBlocks(fullResponse)) {
-      const ok = await confirmRun(cmd, { alwaysAsk: true });
-      if (!ok) {
-        ui.log('dim', '  Skipped.\n');
-        continue;
+    if (ctx.mode === 'build' && canPrompt()) {
+      for (const cmd of extractShBlocks(fullResponse)) {
+        if (signal?.aborted) break;
+        const ok = await confirmRun(cmd, { alwaysAsk: true });
+        if (ok !== true) {
+          ui.log('dim', '  Skipped.\n');
+          continue;
+        }
+        await runShell(cmd, { fromUser: false, signal });
+        executedSh = true;
       }
-      await runShell(cmd, { fromUser: false });
-      executedSh = true;
     }
 
     await runCompaction({ force: false });
     saveHistory(ctx.messages);
 
-    if (executedSh) return 'continue';
+    if (executedSh && !signal?.aborted) return 'continue';
   }
 
   async function refreshRetrieval() {
@@ -253,7 +308,7 @@ export function createSession(ctx) {
     try {
       const block = await ctx.indexer.getContextBlock(text, { limit: 6, maxChars: 6000 });
       if (block) {
-        ctx.retrievalBlock = `\n\n### Retrieved code (semantic index)\nSnippets from the project most relevant to the latest request — use them to locate code precisely, and read full files when you need more.\n\n${block}\n`;
+        ctx.retrievalBlock = `\n\n### Retrieved code (semantic index)\nSnippets from the project most relevant to the latest request. Use them to locate code precisely, and read full files when you need more.\n\n${block}\n`;
       }
     } catch {
       ctx.retrievalBlock = '';
@@ -261,7 +316,7 @@ export function createSession(ctx) {
   }
 
   function resolveContextWindow() {
-    const fromModel = cachedContextLength(ctx.opts.model);
+    const fromModel = cachedContextLength(ctx.opts.model, ctx.opts.baseUrl);
     if (fromModel && fromModel > 0) return fromModel;
     return ctx.opts.context_window || DEFAULT_CONTEXT_WINDOW;
   }
@@ -279,10 +334,16 @@ export function createSession(ctx) {
       { role: 'user', content: JSON.stringify(evicted) },
     ];
     let summaryText = '';
-    for await (const chunk of streamChat(summaryPrompt, { ...ctx.opts, temperature: 0.3, tools: null })) {
+    for await (const chunk of streamChat(summaryPrompt, { ...ctx.opts, tools: null, onWarning: (m) => ui.log('warn', m) })) {
       if (chunk.content) summaryText += chunk.content;
     }
     return summaryText;
+  }
+
+  function shiftIndex(idx, evicted, summarized) {
+    if (idx == null) return idx;
+    if (idx < 1 + evicted) return null;
+    return idx - evicted + (summarized ? 1 : 0);
   }
 
   async function runCompaction({ force = false } = {}) {
@@ -299,6 +360,9 @@ export function createSession(ctx) {
     if (result.compacted) {
       ctx.lastPromptTokens = null;
       ctx.lastPromptLen = null;
+      const summarized = result.reason === 'summarized';
+      ctx.lastUserPromptIdx = shiftIndex(ctx.lastUserPromptIdx, result.evicted, summarized);
+      ctx.turnAnchor = shiftIndex(ctx.turnAnchor, result.evicted, summarized);
       if (result.reason === 'dropped') {
         ui.log('diag', `Summarization failed; dropped ${result.evicted} old message(s). (${result.error})`);
       } else {
@@ -308,10 +372,58 @@ export function createSession(ctx) {
     return result;
   }
 
-  async function agentLoop({ truncateOnError, maxLoops = MAX_AGENT_LOOPS }) {
-    await refreshRetrieval();
-    await runAgentLoop(() => streamAssistant({ truncateOnError }), maxLoops);
+  function refreshSystemPrompt() {
+    const content = getSystemPrompt(ctx.mode);
+    if (ctx.messages[0]?.role === 'system') ctx.messages[0] = { ...ctx.messages[0], content };
+    else ctx.messages.unshift({ role: 'system', content });
+    ctx.promptMode = ctx.mode;
   }
 
-  return { agentLoop, runShell, runCompaction, currentContextTokens, resolveContextWindow };
+  function interrupt() {
+    if (!ctx.turnController) return;
+    ctx.turnController.abort();
+    ui.cancelPending?.();
+  }
+
+  async function agentLoop({ truncateOnError = null, maxLoops } = {}) {
+    const limit = maxLoops ?? ctx.opts.max_agent_loops ?? MAX_AGENT_LOOPS;
+    const controller = new AbortController();
+    ctx.turnController = controller;
+    ctx.turnAnchor = truncateOnError;
+    ctx.lastTurnFailed = false;
+    ctx.isBusy = true;
+    const onSigint = () => interrupt();
+    process.on('SIGINT', onSigint);
+    try {
+      await refreshRetrieval();
+      const status = await runAgentLoop(() => streamAssistant({ signal: controller.signal }), limit, controller.signal);
+      if (status === 'limit') {
+        ui.log('warn', `Stopped after ${limit} tool rounds. Send "continue" to let it keep going.`);
+      } else if (status === 'aborted') {
+        ui.log('warn', 'Interrupted.');
+        saveHistory(ctx.messages);
+      }
+      return status;
+    } finally {
+      process.removeListener('SIGINT', onSigint);
+      ctx.turnController = null;
+      ctx.turnAnchor = null;
+      ctx.isBusy = false;
+    }
+  }
+
+  async function submitPrompt(rawText, { maxLoops } = {}) {
+    if (ctx.promptMode !== ctx.mode) refreshSystemPrompt();
+    const { text, context, images, warnings } = resolveMentions(rawText, { model: ctx.opts.model });
+    warnMentions(warnings, ui);
+    ui.userMessage(text);
+    const body = text + context;
+    const content = images.length > 0 ? [{ type: 'text', text: body }, ...images] : body;
+    ctx.lastUserPromptIdx = ctx.messages.length;
+    ctx.stats.messageCount++;
+    ctx.messages.push({ role: 'user', content });
+    return agentLoop({ truncateOnError: ctx.lastUserPromptIdx, maxLoops });
+  }
+
+  return { agentLoop, submitPrompt, runShell, runCompaction, currentContextTokens, resolveContextWindow, refreshSystemPrompt, interrupt };
 }

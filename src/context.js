@@ -1,15 +1,17 @@
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'fs';
 import { resolve, relative } from 'path';
 import { simpleGlob } from './glob.js';
+import { cachedModel } from './models.js';
 
 const MAX_FILE_SIZE = 50 * 1024;
 const MAX_TOTAL_SIZE = 200 * 1024;
+const MAX_DIR_ENTRIES = 200;
 
 const VISION_MODEL_HINTS = [
   'gpt-4o', 'gpt-4.1', 'gpt-4-turbo', 'gpt-4-vision', 'chatgpt-4o',
   'o1', 'o3', 'o4-mini',
-  'claude-3', 'claude-4', 'claude-sonnet', 'claude-opus', 'claude-haiku',
-  'sonnet', 'opus', 'haiku',
+  'gpt-5', 'gpt-6',
+  'claude', 'sonnet', 'opus', 'haiku', 'fable',
   'gemini',
   'pixtral', 'llava', 'vision', 'internvl', 'molmo', 'moondream',
   'llama-3.2', 'llama-4', 'qwen-vl', 'qwen2-vl', 'qwen2.5-vl', 'qvq',
@@ -18,60 +20,88 @@ const VISION_MODEL_HINTS = [
 
 export function isVisionCapableModel(model) {
   if (!model) return false;
+  const known = cachedModel(String(model));
+  if (Array.isArray(known?.inputModalities)) return known.inputModalities.includes('image');
   const id = String(model).toLowerCase();
   return VISION_MODEL_HINTS.some((hint) => id.includes(hint));
 }
 
 export function expandMentions(text) {
   const mentions = [];
-  const regex = /@([^\s@]+)/g;
+  const regex = /(^|\s)@([^\s@]+)/g;
   let match;
   while ((match = regex.exec(text)) !== null) {
-    mentions.push({ token: match[0], path: match[1], index: match.index });
+    const index = match.index + match[1].length;
+    mentions.push({ token: '@' + match[2], path: match[2], index });
   }
   return mentions;
+}
+
+function locateMention(raw, cwd) {
+  const candidates = [raw];
+  const trimmed = raw.replace(/[)\],.;:!?'"]+$/, '');
+  if (trimmed && trimmed !== raw) candidates.push(trimmed);
+  for (const candidate of candidates) {
+    if (candidate.includes('*')) {
+      const paths = simpleGlob(candidate, cwd).map((p) => relative(cwd, p));
+      if (paths.length > 0) return { used: candidate, paths };
+      continue;
+    }
+    if (existsSync(resolve(cwd, candidate))) return { used: candidate, paths: [candidate] };
+  }
+  return null;
+}
+
+function looksIntended(raw, cwd) {
+  if (raw.includes('*')) return true;
+  const first = raw.split('/')[0];
+  return raw.includes('/') && first !== '' && existsSync(resolve(cwd, first));
+}
+
+function listDirectory(fullPath) {
+  const entries = readdirSync(fullPath, { withFileTypes: true })
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+    .sort();
+  const shown = entries.slice(0, MAX_DIR_ENTRIES);
+  if (entries.length > shown.length) shown.push(`... ${entries.length - shown.length} more`);
+  return shown.join('\n');
 }
 
 export function resolveMentions(text, { cwd = process.cwd(), model } = {}) {
   const mentions = expandMentions(text);
   if (mentions.length === 0) return { text, context: '', images: [], warnings: [] };
 
-  let contextParts = [];
-  let images = [];
-  let warnings = [];
+  const contextParts = [];
+  const images = [];
+  const warnings = [];
+  const consumed = [];
   let totalSize = 0;
-  let cleanText = text;
   let limitReached = false;
 
   const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
   for (const mention of mentions) {
-    if (limitReached) break;
-
-    let paths = [mention.path];
-    if (mention.path.includes('*')) {
-      paths = simpleGlob(mention.path, cwd).map(p => relative(cwd, p));
-      if (paths.length === 0) {
-        contextParts.push(`[No files matched: ${mention.path}]`);
-        continue;
+    const found = locateMention(mention.path, cwd);
+    if (!found) {
+      if (looksIntended(mention.path, cwd)) {
+        warnings.push(`Nothing matches ${mention.token}; it was sent as plain text.`);
       }
+      continue;
     }
+    consumed.push(mention.index);
+    if (limitReached) continue;
 
-    for (const pathStr of paths) {
+    for (const pathStr of found.paths) {
       if (limitReached) break;
 
       const fullPath = resolve(cwd, pathStr);
-      const relPath = relative(cwd, fullPath);
-
-      if (!existsSync(fullPath)) {
-        contextParts.push(`[File not found: ${pathStr}]`);
-        continue;
-      }
+      const relPath = relative(cwd, fullPath) || '.';
 
       try {
         const stat = statSync(fullPath);
         if (stat.isDirectory()) {
-          contextParts.push(`[${pathStr} is a directory, not a file]`);
+          contextParts.push(`--- ${relPath}/ (directory listing) ---\n${listDirectory(fullPath)}\n--- end ${relPath}/ ---`);
           continue;
         }
 
@@ -101,7 +131,7 @@ export function resolveMentions(text, { cwd = process.cwd(), model } = {}) {
           totalSize += content.length;
         }
       } catch (err) {
-        contextParts.push(`[Error reading ${pathStr}: ${err.message}]`);
+        warnings.push(`Could not read ${pathStr}: ${err.message}`);
       }
 
       if (totalSize > MAX_TOTAL_SIZE) {
@@ -111,7 +141,11 @@ export function resolveMentions(text, { cwd = process.cwd(), model } = {}) {
     }
   }
 
-  cleanText = cleanText.replace(/@[^\s@]+/g, '').replace(/\s{2,}/g, ' ').trim();
+  let cleanText = text;
+  for (const index of consumed.slice().reverse()) {
+    cleanText = cleanText.slice(0, index) + cleanText.slice(index + 1);
+  }
+  cleanText = cleanText.replace(/[ \t]{2,}/g, ' ').trim();
 
   const context = contextParts.length > 0
     ? '\n\nAttached file contents:\n\n' + contextParts.join('\n\n')

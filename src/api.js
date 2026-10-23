@@ -91,7 +91,7 @@ export function parseSSELine(line) {
   }
 }
 
-import { detectProviderId, providerSupportsCacheControl, providerSupportsRoutingField } from './providers.js';
+import { detectProviderId, providerSupportsCacheControl, providerSupportsRoutingField, providerOption } from './providers.js';
 
 function withCacheControl(msg) {
   const clone = { ...msg };
@@ -110,35 +110,35 @@ export async function* streamChat(messages, opts = {}) {
   const {
     apiKey,
     baseUrl = 'https://openrouter.ai/api/v1',
-    model = 'openai/gpt-4o',
-    temperature = 0.7,
-    maxTokens = 128000,
+    model = 'anthropic/claude-opus-5.5',
+    temperature,
+    maxTokens,
     signal,
     referer,
     title,
     maxRetries = 3,
     tools = null,
     provider,
+    onWarning = (msg) => process.stderr.write(`\n[aplotita: warn] ${msg}\n`),
   } = opts;
 
   const providerId = detectProviderId(provider, baseUrl);
   const useCacheControl = providerSupportsCacheControl(providerId);
 
-  const headers = {
-    'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  };
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   if (referer) headers['HTTP-Referer'] = referer;
   if (title) headers['X-Title'] = title;
 
   const body = {
     model,
     messages,
-    temperature,
-    max_tokens: maxTokens,
     stream: true,
     stream_options: { include_usage: true },
   };
+  if (temperature != null) body.temperature = temperature;
+  const outputCap = maxTokens ?? providerOption(providerId, 'defaultMaxTokens');
+  if (outputCap != null) body[providerOption(providerId, 'maxTokensField') || 'max_tokens'] = outputCap;
 
   if (providerSupportsRoutingField(providerId)) {
     body.provider = { allow_fallbacks: false };
@@ -205,7 +205,6 @@ export async function* streamChat(messages, opts = {}) {
         else if (r.type === 'usage') yield { ...r.value, _type: 'usage' };
         else if (r.type === 'error') {
           parseErrorCount++;
-          process.stderr.write(`\n[aplotita: warn] malformed SSE chunk received\n`);
         }
       }
 
@@ -220,7 +219,7 @@ export async function* streamChat(messages, opts = {}) {
   } finally {
     try { await reader.cancel(); } catch {}
     if (parseErrorCount > 0) {
-      process.stderr.write(`\n[aplotita: warn] ${parseErrorCount} malformed SSE chunk(s) were dropped from the response.\n`);
+      onWarning(`${parseErrorCount} malformed SSE chunk(s) were dropped from the response.`);
     }
     reader.releaseLock();
   }

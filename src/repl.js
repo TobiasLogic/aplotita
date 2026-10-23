@@ -1,14 +1,14 @@
 import * as p from '@clack/prompts';
 import { TextPrompt } from '@clack/core';
 import chalk from 'chalk';
-import { config, validateConfig, legacyConfigMigrated, legacyConfigSource } from './config.js';
+import { config, validateConfig, legacyConfigMigrated, legacyConfigSource, PROJECT_SETTING_KEYS } from './config.js';
 import { fadeTransition } from './shimmer.js';
-import { resolveMentions } from './context.js';
 import { createPasteState, feedPasteKey, insertPaste } from './paste.js';
 import { initMcpServers, cleanupMcpServers } from './mcp.js';
-import { VexraIndexer } from './indexer/index.js';
+import { stopBackgroundTasks } from './executor.js';
+import { CodeIndexer } from './indexer/index.js';
 import { setIndexer, getIndexer } from './indexer/instance.js';
-import { getProjectConfigOverrides, getSystemPrompt, buildInitialMessages, warnMentions } from './prompt.js';
+import { readProjectSettings, buildInitialMessages } from './prompt.js';
 import { loadHistory } from './history.js';
 import { promptLine, printSessionStats, printWordmark } from './render.js';
 import { runProviderSetup } from './setup.js';
@@ -18,16 +18,18 @@ import { createStdoutController } from './ui/stdout-adapter.js';
 import { createInkController } from './ui/controller.js';
 import { mountInkApp } from './ui/app.js';
 import { setToolUI } from './tools.js';
+import { isKeyOptional } from './providers.js';
+import { homedir } from 'os';
+import { resolve } from 'path';
 
 export { recentUserText } from './prompt.js';
 
 export async function start(userOpts = {}) {
   const { resume = false, initialPrompt = '', headless = false, ...optOverrides } = userOpts;
-  const projectOverrides = getProjectConfigOverrides();
-  const opts = { ...config, ...projectOverrides, ...optOverrides };
-  if (headless) opts.headless = true;
+  const projectSettings = readProjectSettings();
+  const opts = { ...config, ...projectSettings.overrides, ...optOverrides, headless };
 
-  if (!opts.apiKey && opts.provider !== 'ollama') {
+  if (!opts.apiKey && !isKeyOptional(opts)) {
     if (opts.headless) {
       console.error('Error: Headless mode requires an API key or Ollama provider.');
       process.exit(1);
@@ -43,6 +45,7 @@ export async function start(userOpts = {}) {
     opts,
     messages: buildInitialMessages('build'),
     mode: 'build',
+    promptMode: 'build',
     indexer: null,
     retrievalBlock: '',
     lastPromptTokens: null,
@@ -65,6 +68,7 @@ export async function start(userOpts = {}) {
     console.log();
     printWordmark();
     console.log();
+    stopBackgroundTasks();
     cleanupMcpServers();
     getIndexer()?.close();
     await fadeTransition('  until next time', { color: [180, 100, 255], direction: 'out' });
@@ -73,7 +77,6 @@ export async function start(userOpts = {}) {
   ctx.goodbye = goodbye;
 
   async function handleSubmit(input) {
-    ctx.messages[0].content = getSystemPrompt(ctx.mode);
     const trimmed = (input || '').trim();
     if (!trimmed) return;
 
@@ -85,30 +88,17 @@ export async function start(userOpts = {}) {
       return;
     }
 
-    ctx.lastUserPromptIdx = ctx.messages.length;
-    ctx.stats.messageCount++;
-    const { text: cleanText, context, images, warnings } = resolveMentions(trimmed, { model: opts.model });
-    warnMentions(warnings, ctx.ui);
-    ctx.ui.userMessage(cleanText);
-
-    let messageContent;
-    if (images && images.length > 0) {
-      messageContent = [{ type: 'text', text: cleanText + context }, ...images];
-    } else {
-      messageContent = cleanText + context;
-    }
-
-    ctx.messages.push({ role: 'user', content: messageContent });
-    await ctx.agentLoop({ truncateOnError: ctx.lastUserPromptIdx });
+    await ctx.submitPrompt(trimmed);
   }
 
   if (interactive) {
     inkApp = mountInkApp(ctx, { onSubmit: handleSubmit, onExit: goodbye });
   } else {
     process.on('SIGINT', async () => {
-      if (ctx.isStreaming) return;
+      if (ctx.isBusy) return;
       if (process.stdout.isTTY) process.stdout.write('\x1b[?2004l');
       printSessionStats(ctx.stats);
+      stopBackgroundTasks();
       cleanupMcpServers();
       if (ctx.indexer) ctx.indexer.close();
       process.stdout.write('\x1b[?25h');
@@ -120,11 +110,21 @@ export async function start(userOpts = {}) {
   if (legacyConfigMigrated && !opts.headless) {
     ctx.ui.log('warn', `Migrated your settings from ${legacyConfigSource} to ~/.aplotita. The old directory was left in place and can be deleted once everything looks right.`);
   }
+  if (projectSettings.ignored.length > 0) {
+    ctx.ui.log('warn', `Ignored ${projectSettings.ignored.join(', ')} in ${projectSettings.path}. Project files can only set ${PROJECT_SETTING_KEYS.join(', ')}; the provider, key and URL stay in ~/.aplotita/config.json.`);
+  } else if (projectSettings.error) {
+    ctx.ui.log('warn', `Could not parse ${projectSettings.path}: ${projectSettings.error}`);
+  }
   await initMcpServers(ctx.ui);
 
-  if (config.indexer?.enabled && !opts.headless) {
+  const cwd = resolve(process.cwd());
+  const indexableRoot = cwd !== resolve(homedir()) && cwd !== resolve('/');
+  if (config.indexer?.enabled && !opts.headless && !indexableRoot) {
+    ctx.ui.log('message', chalk.dim('index skipped · start aplotita inside a project folder to enable code search'));
+  }
+  if (config.indexer?.enabled && !opts.headless && indexableRoot) {
     try {
-      ctx.indexer = new VexraIndexer({
+      ctx.indexer = new CodeIndexer({
         root: process.cwd(),
         log: (m) => { if (!ctx.isStreaming) ctx.ui.log('message', chalk.dim(m)); },
       }).init();
@@ -146,25 +146,20 @@ export async function start(userOpts = {}) {
     const loaded = loadHistory();
     if (loaded && loaded.length > 1) {
       ctx.messages = loaded;
+      ctx.refreshSystemPrompt();
       ctx.ui.log('success', `Resumed previous session (${loaded.length - 1} message(s)).`);
     } else {
-      ctx.ui.log('warn', 'No previous session to resume - starting fresh.');
+      ctx.ui.log('warn', 'No previous session in this folder to resume. Starting fresh.');
     }
   }
 
   if (initialPrompt) {
-    ctx.messages[0].content = getSystemPrompt(ctx.mode);
-    const { text, context, images, warnings } = resolveMentions(initialPrompt, { model: opts.model });
-    warnMentions(warnings, ctx.ui);
-    const userMsg = { role: 'user', content: context ? `${text}\n${context}` : text };
-    if (images.length > 0) userMsg.content = [{ type: 'text', text: userMsg.content }, ...images];
-    ctx.ui.userMessage(text);
-    ctx.messages.push(userMsg);
-    await ctx.agentLoop({ truncateOnError: ctx.messages.length - 1 });
+    const status = await ctx.submitPrompt(initialPrompt);
     if (opts.headless) {
       printSessionStats(ctx.stats);
+      stopBackgroundTasks();
       cleanupMcpServers();
-      process.exit(0);
+      process.exit(status === 'aborted' ? 130 : ctx.lastTurnFailed ? 1 : 0);
     }
   }
 
@@ -181,8 +176,6 @@ export async function start(userOpts = {}) {
   if (process.stdout.isTTY) process.stdout.write('\x1b[?2004h');
 
   while (true) {
-    ctx.messages[0].content = getSystemPrompt(ctx.mode);
-
     const modes = ['build', 'architect', 'ask'];
     const inputPrompt = new TextPrompt({
       render() {

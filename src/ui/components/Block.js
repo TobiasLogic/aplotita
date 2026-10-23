@@ -18,15 +18,16 @@ const LOG_STYLE = {
   dim: (t) => chalk.dim(t),
 };
 
-function toolLine({ name, result = {}, rejected }) {
-  if (rejected) return chalk.dim('  ⨯ skipped');
+function toolLine({ name, result = {}, rejected, reason }) {
+  if (rejected) return chalk.dim(reason ? `  ⨯ ${name} blocked: ${reason}` : '  ⨯ skipped');
   if (result.success || result.content || result.entries || result.output) {
     const summary = result.content
       ? result.content.slice(0, 200)
       : result.entries ? String(result.entries).slice(0, 200)
       : result.output ? String(result.output).slice(0, 200)
       : '';
-    return chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`);
+    const warn = result.warning ? chalk.yellow('  ▲ saved with a syntax error') : '';
+    return chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`) + warn;
   }
   if (result.error) return chalk.red('  ✗ ') + chalk.bold(name) + chalk.dim(` ${result.error}`);
   return chalk.green('  ✔ ') + chalk.bold(name);
@@ -37,7 +38,7 @@ function bannerLines(opts = {}) {
     '',
     '  ' + inlineWordmark('aplótita') + '  ' + chalk.dim('the simple terminal AI coding assistant'),
     '  ' + chalk.gray('model ') + chalk.white(opts.model || '') +
-      chalk.gray(`    temp ${opts.temperature}   max ${opts.maxTokens}`),
+      chalk.gray(`    temp ${opts.temperature ?? 'default'}   max ${opts.maxTokens ?? 'default'}`),
     '  ' + chalk.gray('type ') + chalk.hex('#36D0D0')('/help') + chalk.gray(' for commands · ^C to exit'),
     '',
   ];

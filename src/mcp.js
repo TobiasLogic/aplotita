@@ -1,7 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { createRequire } from 'module';
 import { config } from './config.js';
 import chalk from 'chalk';
+
+const { version } = createRequire(import.meta.url)('../package.json');
 
 const mcpClients = new Map();
 const mcpTools = new Map();
@@ -22,8 +25,8 @@ export async function initMcpServers(ui) {
       });
       
       const client = new Client({
-        name: "ai-cli",
-        version: "1.0.0"
+        name: 'aplotita',
+        version,
       }, {
         capabilities: { tools: {} }
       });
@@ -74,10 +77,11 @@ export async function executeMcpTool(name, args) {
       arguments: args
     });
     
-    if (result.isError) {
-       return { error: result.content.map(c => c.text).join('\n') };
-    }
-    return { content: result.content.map(c => c.text).join('\n') };
+    const text = (result.content || [])
+      .map((c) => (c.type === 'text' ? c.text : `[${c.type} content omitted]`))
+      .join('\n');
+    if (result.isError) return { error: text || 'MCP tool reported an error' };
+    return { content: text };
   } catch (err) {
     return { error: `MCP Tool execution failed: ${err.message}` };
   }

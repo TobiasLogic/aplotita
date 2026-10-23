@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, basename, sep } from 'path';
 import { createHash } from 'crypto';
-import { createRequire } from 'module';
+import { execFileSync } from 'child_process';
 import { config, CONFIG_DIR } from '../config.js';
 import { IndexDB } from './db.js';
 import { createEmbedder } from './embed.js';
@@ -11,6 +11,27 @@ const MAX_DEPTH = 12;
 const MAX_CHUNK_CHARS = 6000;
 const RRF_K = 60;
 const SKIP_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'composer.lock', 'Cargo.lock', 'poetry.lock']);
+const SECRET_NAME = /(secret|credential|private[-_]?key|service[-_]?account|api[-_]?key|token)s?\.(json|ya?ml|txt|cfg|ini|conf)$/i;
+
+function gitFiles(root) {
+  try {
+    const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+      cwd: root, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split('\0').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+function gitIgnores(root, absPath) {
+  try {
+    execFileSync('git', ['check-ignore', '-q', '--', absPath], { cwd: root, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function sha1(text) {
   return createHash('sha1').update(text).digest('hex');
@@ -35,7 +56,7 @@ function reciprocalRankFusion(lists, weights) {
   return [...scores.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export class VexraIndexer {
+export class CodeIndexer {
   constructor({ root = process.cwd(), log, cfg, dbPath, embedder } = {}) {
     this.root = root;
     this.cfg = cfg || config.indexer || {};
@@ -53,6 +74,7 @@ export class VexraIndexer {
     this.watcher = null;
     this._debounce = new Map();
     this._indexing = false;
+    this._git = null;
   }
 
   init() {
@@ -74,11 +96,29 @@ export class VexraIndexer {
   }
 
   isIndexable(absPath) {
-    if (SKIP_FILES.has(basename(absPath))) return false;
+    const name = basename(absPath);
+    if (SKIP_FILES.has(name) || SECRET_NAME.test(name)) return false;
     if (!this.extensions.has(extOf(absPath))) return false;
     const rel = relative(this.root, absPath);
     if (rel.startsWith('..')) return false;
     return !rel.split(sep).some((seg) => this.ignored.has(seg) || (seg.startsWith('.') && seg !== '.'));
+  }
+
+  #listFiles(root) {
+    const tracked = gitFiles(root);
+    this._git = tracked !== null;
+    if (!tracked) {
+      const out = [];
+      this.#walk(root, 0, out);
+      return out;
+    }
+    const out = [];
+    for (const rel of tracked) {
+      if (out.length >= this.maxFiles) break;
+      const abs = join(root, rel);
+      if (this.isIndexable(abs)) out.push(abs);
+    }
+    return out;
   }
 
   #walk(dir, depth, out) {
@@ -96,7 +136,7 @@ export class VexraIndexer {
       if (entry.isDirectory()) {
         if (this.ignored.has(entry.name)) continue;
         this.#walk(abs, depth + 1, out);
-      } else if (entry.isFile() && this.extensions.has(extOf(entry.name)) && !SKIP_FILES.has(entry.name)) {
+      } else if (entry.isFile() && this.isIndexable(abs)) {
         out.push(abs);
       }
     }
@@ -178,8 +218,7 @@ export class VexraIndexer {
     if (this._indexing) return this.db.stats();
     this._indexing = true;
     try {
-      const files = [];
-      this.#walk(root, 0, files);
+      const files = this.#listFiles(root);
 
       const seen = new Set();
       let changed = 0;
@@ -208,6 +247,7 @@ export class VexraIndexer {
 
   async updateFile(absPath) {
     if (!this.isIndexable(absPath)) return;
+    if (this._git && gitIgnores(this.root, absPath)) return;
     let stat;
     try {
       stat = statSync(absPath);
@@ -273,14 +313,15 @@ export class VexraIndexer {
     return parts.join('\n\n');
   }
 
-  startWatch() {
+  async startWatch() {
     if (this.watcher) return this;
     let chokidar;
     try {
-      chokidar = require('chokidar');
+      chokidar = await import('chokidar');
     } catch {
-      return this; // optional dependency; watching simply disabled
+      return this;
     }
+    if (this._closed) return this;
     this.watcher = chokidar.watch(this.root, {
       ignoreInitial: true,
       persistent: true,
@@ -310,6 +351,7 @@ export class VexraIndexer {
   }
 
   close() {
+    this._closed = true;
     this.stopWatch();
     if (this.db) this.db.close();
   }

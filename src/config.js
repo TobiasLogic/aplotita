@@ -2,7 +2,8 @@ import dotenv from 'dotenv';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, chmodSync } from 'fs';
+import { isKeyOptional } from './providers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,9 +32,10 @@ migrateLegacyConfigDir();
 
 const DEFAULTS = {
   baseUrl: 'https://openrouter.ai/api/v1',
-  model: 'openai/gpt-4o',
-  temperature: 0.7,
-  maxTokens: 128000,
+  model: 'anthropic/claude-opus-5.5',
+  temperature: null,
+  maxTokens: null,
+  maxAgentLoops: 25,
   referer: 'https://github.com/TobiasLogic/aplotita',
   title: 'aplotita',
 };
@@ -107,6 +109,7 @@ export const config = {
   maxTokens: resolveInt(process.env.OPENROUTER_MAX_TOKENS, fileCfg.maxTokens, DEFAULTS.maxTokens, 1),
   referer: resolveString(process.env.OPENROUTER_REFERER, fileCfg.referer, DEFAULTS.referer),
   title: resolveString(process.env.OPENROUTER_TITLE, fileCfg.title, DEFAULTS.title),
+  max_agent_loops: resolveInt(process.env.APLOTITA_MAX_AGENT_LOOPS, fileCfg.max_agent_loops, DEFAULTS.maxAgentLoops, 1),
   context_window: resolveInt(process.env.APLOTITA_CONTEXT_WINDOW, fileCfg.context_window, 128000, 1),
   compact_high_watermark: resolveFloat(process.env.APLOTITA_COMPACT_HIGH, fileCfg.compact_high_watermark, 0.75, 0.1, 0.95),
   compact_low_watermark: resolveFloat(process.env.APLOTITA_COMPACT_LOW, fileCfg.compact_low_watermark, 0.5, 0.05, 0.9),
@@ -117,28 +120,47 @@ export const config = {
   },
 };
 
+export const PROJECT_SETTING_KEYS = ['model', 'temperature', 'maxTokens', 'context_window', 'compact_high_watermark', 'compact_low_watermark', 'max_agent_loops'];
+
+export function pickProjectSettings(raw) {
+  const overrides = {};
+  const ignored = [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { overrides, ignored };
+  for (const [key, value] of Object.entries(raw)) {
+    if (PROJECT_SETTING_KEYS.includes(key)) overrides[key] = value;
+    else ignored.push(key);
+  }
+  return { overrides, ignored };
+}
+
 export function validateConfig(opts) {
-  if (!opts.apiKey) {
+  if (!opts.apiKey && !isKeyOptional(opts)) {
     throw new Error('No API key set. Run /provider to configure one.');
   }
-  if (typeof opts.temperature !== 'number' || isNaN(opts.temperature) || opts.temperature < 0 || opts.temperature > 2) {
+  if (opts.temperature != null && (typeof opts.temperature !== 'number' || isNaN(opts.temperature) || opts.temperature < 0 || opts.temperature > 2)) {
     throw new Error(`temperature must be between 0.0 and 2.0, got ${opts.temperature}`);
   }
-  if (!Number.isInteger(opts.maxTokens) || opts.maxTokens < 1) {
+  if (opts.maxTokens != null && (!Number.isInteger(opts.maxTokens) || opts.maxTokens < 1)) {
     throw new Error(`maxTokens must be a positive integer, got ${opts.maxTokens}`);
   }
   return true;
 }
 
+export function writePrivateFile(file, data, dir = CONFIG_DIR) {
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  if (dir !== CONFIG_DIR) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(file, data, { encoding: 'utf-8', mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch {}
+}
+
 export function saveConfig(data) {
   try {
-    mkdirSync(CONFIG_DIR, { recursive: true });
     let existing = {};
     try {
       existing = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
     } catch {}
     const merged = { ...existing, ...data };
-    writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+    writePrivateFile(CONFIG_FILE, JSON.stringify(merged, null, 2));
     return true;
   } catch {
     return false;

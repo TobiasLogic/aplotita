@@ -8,9 +8,10 @@
 
 aplótita is a terminal-native AI coding assistant that lives inside your workflow. It maps your
 codebase, runs tools, edits files, executes commands, and can drive long autonomous tasks, all
-from a fast, full-screen TUI — a scrolling conversation view, a persistent input box and status
+from a fast, full-screen TUI: a scrolling conversation view, a persistent input box and status
 bar, streaming markdown, and inline approval overlays for every file edit and command. Bring your
-own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, or a local Ollama.
+own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, a local Ollama, or any
+OpenAI-compatible server.
 
 ---
 
@@ -21,6 +22,7 @@ own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, or a 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
+- [Keyboard](#keyboard)
 - [Slash Commands](#slash-commands)
 - [Attaching Context with `@`](#attaching-context-with-)
 - [Supported Providers](#supported-providers)
@@ -33,35 +35,39 @@ own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, or a 
 
 ## Features
 
-- **Semantic code index:** builds a hybrid retrieval index of your repo — vector embeddings
-  (`sqlite-vec`) + BM25 keyword (FTS5) + exact-identifier search, fused with reciprocal rank
-  fusion — and folds the most relevant snippets into the model's context each turn so it locates
-  code precisely instead of blindly listing directories. Symbols are extracted with `acorn`
-  (JS/TS), it re-indexes incrementally as you edit, and it degrades gracefully: with no API key
-  (or on older Node) it falls back to keyword search.
-- **Dynamic modes:** press `Tab` while typing to cycle agent personalities.
+- **Semantic code index:** builds a hybrid retrieval index of your repo (vector embeddings via
+  `sqlite-vec`, BM25 keyword search via FTS5, and exact-identifier search, fused with reciprocal
+  rank fusion) and adds the most relevant snippets to each request so the model locates code
+  precisely instead of blindly listing directories. Symbols are extracted with `acorn` (JS/TS).
+  It follows your `.gitignore`, re-indexes as files change, and degrades gracefully: with no
+  embeddings endpoint (or on older Node) it falls back to keyword search.
+- **Dynamic modes:** press `Tab` while typing to cycle agent personalities. Each mode only gets
+  the tools it is allowed to use, so the limits are enforced, not just suggested.
   - `[BUILD]`: full access to write code and run commands (default).
-  - `[ARCHITECT]`: high-level design and analysis; markdown proposals only.
-  - `[ASK]`: mentor mode; explains and clarifies without touching files.
+  - `[ARCHITECT]`: reads and searches the project and can write markdown documents only.
+  - `[ASK]`: mentor mode; read-only tools, never edits files or runs commands.
 - **Autonomous task loop:** `/auto <prompt>` kicks off a self-correcting, multi-step run that
-  keeps going until the goal is met. Good for unattended bug-fixing.
-- **Headless and CI-ready:** `--headless` runs non-interactively, auto-approves tool use, and
-  exits when done. Drop it into pipelines or spawn it as a subagent.
+  keeps going until the goal is met. Tool use is approved automatically, destructive commands
+  still ask, and `Esc` stops it.
+- **Headless and CI-ready:** `--headless` runs non-interactively, auto-approves routine tool use,
+  refuses destructive commands, and exits non-zero if the request fails. Drop it into pipelines
+  or spawn it as a subagent.
 - **Rich tool suite:** read/write/edit/multi-edit files, list dirs, grep, run shell, git
   status/diff, fetch web pages, manage background tasks, spin up git worktrees, and ask you
   multiple-choice questions mid-task.
-- **`@`-mention context:** pull file contents, globs, and images straight into your prompt
-  (`@src/api.js`, `@src/*.js`, `@screenshot.png`).
+- **`@`-mention context:** pull file contents, globs, directory listings, and images straight
+  into your prompt (`@src/api.js`, `@src/*.js`, `@src`, `@screenshot.png`).
 - **Multimodal:** attach images via `@` to vision-capable models.
-- **Sessions and history:** auto-saved history with on-the-fly summarization when context
-  grows, plus named sessions you can save, load, and delete.
-- **Prompt caching:** automatically applies cache breakpoints for Anthropic-style models to cut
-  token costs on long chats.
-- **Built-in guardrails:** destructive shell commands (`rm -rf`, `git push --force`, fork bombs,
-  disk writes, and more) require explicit confirmation before they run.
+- **Sessions and history:** history is auto-saved per project folder, summarized on the fly when
+  the context fills up, and you can save, load, and delete named sessions.
+- **Prompt caching:** applies cache breakpoints for OpenRouter models and keeps the system prompt
+  stable between turns, so long chats actually hit the cache.
+- **Built-in guardrails:** every file write, shell command, background task, subagent, worktree
+  change, and MCP tool call asks first. Destructive commands (`rm -rf`, `git push --force`,
+  `git checkout -- .`, fork bombs, disk writes, and more) always get a red warning.
 - **Model Context Protocol (MCP):** connect external data sources and tools natively.
-- **Tasteful animations:** shimmer waves, gradient bars, particles, matrix rain, and more; pick
-  your loader with `/loader`. Cleanly degrades to plain text when piped or non-TTY.
+- **Spinner styles:** pick your loader with `/loader`. Output degrades to plain text when piped
+  or non-TTY.
 
 ---
 
@@ -71,8 +77,8 @@ own model from OpenRouter, OpenAI, Anthropic, Gemini, Groq, DeepSeek, xAI, or a 
   (React), which requires Node 22+. Semantic code indexing uses the built-in `node:sqlite`
   (Node 22.5+); on 22.0–22.4 the indexer self-disables and the rest of aplótita works normally.
 - An API key from a [supported provider](#supported-providers), or a local
-  [Ollama](https://ollama.com) install (no key needed). Without one, the index falls back to
-  keyword search.
+  [Ollama](https://ollama.com) or other OpenAI-compatible server (llama.cpp, vLLM, LM Studio),
+  which need no key.
 
 ---
 
@@ -187,11 +193,36 @@ aplotita "Fix the failing tests in test/api.test.js" --headless
 aplotita -m anthropic/claude-sonnet-4 "Summarize TODOs across the repo" --headless
 ```
 
+In headless mode the exit code is `0` on success, `1` if the request failed, and `130` if it
+was interrupted.
+
 ### Resume where you left off
 
 ```bash
 aplotita --continue
 ```
+
+History is kept per project folder, so `--continue` picks up the last conversation you had in the
+current directory.
+
+---
+
+## Keyboard
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Send |
+| `Alt+Enter` | New line (pasted text keeps its line breaks) |
+| `↑` / `↓` | Previous / next prompt from this session |
+| `Ctrl+A` / `Ctrl+E` | Start / end of line |
+| `Ctrl+U` / `Ctrl+K` | Delete to start / end of line |
+| `Ctrl+W` | Delete the previous word |
+| `Tab` | Cycle mode |
+| `Esc` or `Ctrl+C` | Interrupt the running turn, including a running command |
+| `Ctrl+C` (idle) | Quit |
+
+On an approval prompt, `y` approves, `n` declines, and `a` approves and stops asking about that
+kind of action for the rest of the session (never offered for destructive commands).
 
 ---
 
@@ -206,21 +237,24 @@ Inside the TUI:
 | `/provider` | Set up provider, API key, and model |
 | `/model [id]` | Show or switch the model |
 | `/models` | Browse and pick models interactively |
-| `/temp [n]` | Show or set temperature (0-2) |
-| `/tokens [n]` | Show or set max output tokens |
+| `/temp [n\|default]` | Show or set temperature (0-2); unset by default |
+| `/tokens [n\|default]` | Show or set max output tokens; unset by default |
 | `/mode [type]` | Switch role: `build`, `architect`, `ask` |
+| `/theme` | Pick an accent color |
 | `/auto <prompt>` | Run an autonomous agent loop |
-| `/loader [style]` | Show or set the loader animation |
+| `/loader [style]` | Show or set the spinner style |
 | `/save [file]` | Export the conversation to markdown |
 | `/retry` | Regenerate the last response |
+| `/allow [reset]` | Show or clear "always allow" approvals for this session |
+| `/compact` | Summarize older history to free up context |
 | `/reset` | Clear the conversation and start fresh |
-| `/resume` | Reload the previous saved session |
+| `/resume` | Reload the previous saved session for this folder |
 | `/session <cmd>` | Named sessions: `list`, `save <name>`, `load <name>`, `delete <name>` |
 | `/editor` | Open `$EDITOR` for multi-line input |
 | `/history` | Show conversation stats & token usage |
 | `/clear` | Clear the screen |
-| `/animations` | Preview all animation styles |
-| `/shimmer` | Preview the wave-bar animation |
+| `/animations` | Preview all animation styles (classic output mode) |
+| `/shimmer` | Preview the wave-bar animation (classic output mode) |
 | `/exit` | Quit (or press Ctrl+C) |
 
 ---
@@ -237,7 +271,9 @@ refactor everything under @src/*.js
 ```
 
 Images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) are sent as vision input to capable models.
-Large files are truncated and a total context cap keeps requests lean.
+Mentioning a folder attaches a listing of it. Large files are truncated and a total context cap
+keeps requests lean. A mention only counts when it starts a word and points at something that
+exists, so npm scopes like `@types/node` and email addresses are sent exactly as you typed them.
 
 ---
 
@@ -248,15 +284,19 @@ for reference.
 
 | Provider | Default model | Get a key |
 | --- | --- | --- |
-| **OpenRouter** | `openai/gpt-4o` | https://openrouter.ai/keys |
-| **OpenAI** | `gpt-4o` | https://platform.openai.com/api-keys |
-| **Anthropic** | `claude-sonnet-4-20250514` | https://console.anthropic.com/settings/keys |
-| **Google (Gemini)** | `gemini-2.5-flash` | https://aistudio.google.com/apikey |
+| **OpenRouter** | `anthropic/claude-opus-5.5` | https://openrouter.ai/keys |
+| **OpenAI** | `gpt-6.1-sol` | https://platform.openai.com/api-keys |
+| **Anthropic** | `claude-opus-5-5` | https://console.anthropic.com/settings/keys |
+| **Google (Gemini)** | `gemini-3.8-flash` | https://aistudio.google.com/apikey |
 | **Groq** | `llama-3.3-70b-versatile` | https://console.groq.com/keys |
 | **DeepSeek** | `deepseek-chat` | https://platform.deepseek.com/api_keys |
-| **xAI (Grok)** | `grok-3-latest` | https://console.x.ai |
-| **Ollama (local)** | `llama3` | No key needed; runs at `http://127.0.0.1:11434` |
-| **Custom** | _your choice_ | Any OpenAI-compatible endpoint |
+| **xAI (Grok)** | `grok-4.7` | https://console.x.ai |
+| **Ollama (local)** | `qwen3` | No key needed; runs at `http://127.0.0.1:11434` |
+| **Custom** | _your choice_ | Any OpenAI-compatible endpoint; the key is optional |
+
+The setup picks from the provider's live model list when it has one, and lets you type to narrow
+long lists. Temperature and max output tokens are left to the provider unless you set them, since
+many current models reject non-default sampling settings.
 
 ---
 
@@ -268,9 +308,17 @@ from older versions is migrated automatically on first run):
 | Path | Purpose |
 | --- | --- |
 | `~/.aplotita/config.json` | Saved provider, API key, model, and defaults |
-| `~/.aplotita/history.json` | Auto-saved conversation history |
+| `~/.aplotita/history/` | Auto-saved conversation history (one file per project folder) |
 | `~/.aplotita/sessions/` | Named sessions from `/session save` |
 | `~/.aplotita/index/` | Semantic code index (one SQLite database per project) |
+| `~/.aplotita/models.json` | Model list cache (per provider URL, refreshed hourly) |
+
+The config, history, and session files hold your key and conversations, so they are written
+readable by your user only.
+
+Other optional keys in `config.json`: `temperature`, `maxTokens`, `max_agent_loops` (tool rounds
+per request, default 25), `context_window`, `compact_high_watermark`, `compact_low_watermark`,
+and `mcpServers`.
 
 ### Semantic code index
 
@@ -298,16 +346,25 @@ Tune it with an optional `indexer` block in `~/.aplotita/config.json` (every fie
 
 - **Embeddings** reuse your active provider's key and base URL by default (OpenRouter / OpenAI);
   set `"embed_provider": "ollama"` for a local server, or `embed_base_url` for a custom endpoint.
+- **What gets indexed:** inside a git repo, only files git would track (your `.gitignore` is
+  respected). Dotfiles, lockfiles, and config files named like secrets (`secrets.json`,
+  `credentials.yaml`, ...) are skipped. Indexing is off when you start aplótita in your home
+  directory or `/`.
 - **No key, no problem:** without embeddings the index falls back to BM25 + exact-identifier search.
 - **Disable** it entirely with `"enabled": false`.
 
 ### Per-project settings
 
-Drop one of these in your project (aplótita searches upward from your working directory):
+Drop these in your project (aplótita searches upward from your working directory, and looks for
+each kind separately so you can use both):
 
-- **`AGENTS.md`** or **`.ai-cli.md`**: freeform instructions injected into the system prompt
+- **`AGENTS.md`** or **`.aplotita.md`**: freeform instructions added to the system prompt
   (project conventions, do's and don'ts, architecture notes).
-- **`.ai-cli.json`**: JSON overrides for `model`, `temperature`, `maxTokens`, and similar.
+- **`.aplotita.json`**: JSON overrides for `model`, `temperature`, `maxTokens`,
+  `context_window`, `max_agent_loops`, and the compaction watermarks. Anything else (such as
+  `baseUrl` or `apiKey`) is ignored with a warning, so a cloned repo can never redirect your key.
+
+The older `.ai-cli.md` and `.ai-cli.json` names still work.
 
 ### Environment variables
 
@@ -320,6 +377,9 @@ These override the config file for the current shell:
 | `OPENROUTER_MODEL` | Model ID |
 | `OPENROUTER_TEMPERATURE` | Temperature (0-2) |
 | `OPENROUTER_MAX_TOKENS` | Max output tokens |
+| `APLOTITA_MAX_AGENT_LOOPS` | Tool rounds per request before it pauses |
+| `APLOTITA_CONTEXT_WINDOW` | Context window to assume when the model's is unknown |
+| `APLOTITA_COMPACT_HIGH` / `APLOTITA_COMPACT_LOW` | Compaction watermarks (fractions of the window) |
 
 When running **from source**, a `.env` file in the repo root is loaded automatically.
 
@@ -327,11 +387,21 @@ When running **from source**, a `.env` file in the repo root is loaded automatic
 
 ## Safety
 
-aplótita asks before applying file writes and edits, and before running shell commands the agent
-proposes. A built-in screen flags genuinely destructive operations: recursive force-deletes,
-`git push --force` / `reset --hard` / `clean -f`, piping remote scripts into a shell, raw disk
-writes, `mkfs`, fork bombs, and power-state changes. Those always require explicit confirmation.
-In `--headless` and `/auto` mode tool use is auto-approved, so point those at trusted tasks.
+aplótita asks before anything with side effects: file writes and edits (with a diff), shell
+commands, background tasks, subagents, git worktree changes, and MCP tool calls. Reading and
+searching the project never asks. Press `a` on a prompt to stop being asked about that kind of
+action for the rest of the session, and `/allow reset` to undo that.
+
+A built-in screen flags destructive operations: recursive or forced deletes (including
+`find -delete`), `git push --force` or `+refspec`, `reset --hard`, `clean -f`,
+`checkout -- .` / `restore .`, `branch -D`, `stash clear`, piping remote scripts into a shell, raw
+disk writes, `mkfs`, fork bombs, and power-state changes. These always show a red confirmation,
+even in `/auto` mode, and are refused outright in `--headless` mode. The screen is a safety net,
+not a sandbox: other tool use is auto-approved in `--headless` and `/auto`, so point those at
+trusted tasks.
+
+Commands run in their own process group, so an interrupt or timeout stops everything a command
+started, and background tasks are stopped when you quit.
 
 ---
 

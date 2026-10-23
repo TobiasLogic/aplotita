@@ -6,7 +6,7 @@ export const PROVIDERS = [
     keyPrefix: 'sk-or-',
     keyHint: 'sk-or-v1-...',
     keyUrl: 'https://openrouter.ai/keys',
-    defaultModel: 'openai/gpt-4o',
+    defaultModel: 'anthropic/claude-opus-5.5',
     supportsModelsEndpoint: true,
     supportsCacheControl: true,
     supportsRoutingField: true,
@@ -18,8 +18,9 @@ export const PROVIDERS = [
     keyPrefix: 'sk-',
     keyHint: 'sk-...',
     keyUrl: 'https://platform.openai.com/api-keys',
-    defaultModel: 'gpt-4o',
+    defaultModel: 'gpt-6.1-sol',
     supportsModelsEndpoint: true,
+    maxTokensField: 'max_completion_tokens',
   },
   {
     id: 'anthropic',
@@ -28,8 +29,9 @@ export const PROVIDERS = [
     keyPrefix: 'sk-ant-',
     keyHint: 'sk-ant-...',
     keyUrl: 'https://console.anthropic.com/settings/keys',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultModel: 'claude-opus-5-5',
     supportsModelsEndpoint: false,
+    defaultMaxTokens: 32000,
   },
   {
     id: 'google',
@@ -38,7 +40,7 @@ export const PROVIDERS = [
     keyPrefix: 'AI',
     keyHint: 'AIza...',
     keyUrl: 'https://aistudio.google.com/apikey',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: 'gemini-3.8-flash',
     supportsModelsEndpoint: false,
   },
   {
@@ -68,7 +70,7 @@ export const PROVIDERS = [
     keyPrefix: 'xai-',
     keyHint: 'xai-...',
     keyUrl: 'https://console.x.ai/',
-    defaultModel: 'grok-3-latest',
+    defaultModel: 'grok-4.7',
     supportsModelsEndpoint: true,
   },
   {
@@ -76,10 +78,11 @@ export const PROVIDERS = [
     name: 'Custom (OpenAI-compatible)',
     baseUrl: '',
     keyPrefix: '',
-    keyHint: 'your-api-key',
+    keyHint: 'leave empty if your server needs no key',
     keyUrl: '',
     defaultModel: '',
     supportsModelsEndpoint: true,
+    keyOptional: true,
   },
   {
     id: 'ollama',
@@ -88,8 +91,9 @@ export const PROVIDERS = [
     keyPrefix: '',
     keyHint: 'Leave empty for local Ollama',
     keyUrl: 'http://localhost:11434',
-    defaultModel: 'llama3',
+    defaultModel: 'qwen3',
     supportsModelsEndpoint: true,
+    keyOptional: true,
   },
 ];
 
@@ -112,6 +116,15 @@ export function providerSupportsCacheControl(id) {
 export function providerSupportsRoutingField(id) {
   const provider = getProvider(id);
   return Boolean(provider && provider.supportsRoutingField);
+}
+
+export function providerOption(id, key) {
+  const provider = getProvider(id);
+  return provider ? provider[key] : undefined;
+}
+
+export function isKeyOptional(opts = {}) {
+  return Boolean(providerOption(detectProviderId(opts.provider, opts.baseUrl), 'keyOptional'));
 }
 
 export function getProviderChoices() {

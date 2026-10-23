@@ -8,13 +8,15 @@ const MAX_DIFF_LINES = 24;
 export function ApprovalOverlay({ payload, onResolve }) {
   const {
     verb, target, hex = '#36D0D0', note, diff,
-    danger = false, message = 'Proceed?', initialValue = true,
+    danger = false, message = 'Proceed?', initialValue = true, allowAlways = false,
   } = payload;
+  const canAlways = allowAlways && !danger;
   const [choice, setChoice] = useState(initialValue);
 
   useInput((input, key) => {
     if (input === 'y' || input === 'Y') { onResolve(true); return; }
     if (input === 'n' || input === 'N') { onResolve(false); return; }
+    if (canAlways && (input === 'a' || input === 'A')) { onResolve('always'); return; }
     if (key.escape) { onResolve(false); return; }
     if (key.leftArrow || key.rightArrow || key.tab) { setChoice((c) => !c); return; }
     if (key.return) { onResolve(choice); return; }
@@ -45,7 +47,7 @@ export function ApprovalOverlay({ payload, onResolve }) {
         </${Box}>`
       : null}
     <${Box} marginTop=${1}>
-      <${Text}>${message}  ${yes} ${no}  ${chalk.dim('(y/n · ←→ · enter)')}</${Text}>
+      <${Text}>${message}  ${yes} ${no}  ${chalk.dim(canAlways ? '(y/n · a = always this session · ←→ · enter)' : '(y/n · ←→ · enter)')}</${Text}>
     </${Box}>
   </${Box}>`;
 }
