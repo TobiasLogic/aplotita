@@ -11,8 +11,9 @@ import { SelectOverlay } from './components/SelectOverlay.js';
 
 export function App({ ctx, controller, onSubmit, onExit }) {
   const [state, setState] = useState(controller.getState());
-  const [mode, setMode] = useState(ctx.mode);
+  const [, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const mode = ctx.mode;
 
   useEffect(() => controller.subscribe(setState), [controller]);
 
@@ -31,7 +32,9 @@ export function App({ ctx, controller, onSubmit, onExit }) {
     if (key.ctrl && input === 'c') {
       if (busy) process.emit('SIGINT');
       else onExit();
+      return;
     }
+    if (key.escape && busy && !state.overlay) process.emit('SIGINT');
   });
 
   const { staticBlocks, liveBlocks } = splitBlocks(state.blocks);
@@ -44,15 +47,15 @@ export function App({ ctx, controller, onSubmit, onExit }) {
     <${Box} flexDirection="column">
       ${liveBlocks.map((b) => html`<${Block} key=${b.id} block=${b} />`)}
     </${Box}>
-    ${state.status ? html`<${Spinner} label=${state.status} />` : null}
+    ${state.status ? html`<${Spinner} label=${state.status} style=${ctx.loaderStyle} />` : null}
     ${overlay
       ? (overlay.kind === 'approval'
           ? html`<${ApprovalOverlay} payload=${overlay.payload} onResolve=${overlay.resolve} />`
           : html`<${SelectOverlay} payload=${overlay.payload} onResolve=${overlay.resolve} />`)
       : html`<${Box} flexDirection="column" marginTop=${1}>
           <${Input} mode=${mode} disabled=${busy} onSubmit=${submit}
-            onModeChange=${(m) => { ctx.mode = m; setMode(m); }} />
-          <${StatusBar} ctx=${ctx} mode=${mode} />
+            onModeChange=${(m) => { ctx.mode = m; setTick((t) => t + 1); }} />
+          <${StatusBar} ctx=${ctx} mode=${mode} busy=${busy} />
         </${Box}>`}
   </${Box}>`;
 }

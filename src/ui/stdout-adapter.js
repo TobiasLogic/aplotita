@@ -75,9 +75,9 @@ export function createStdoutController(ctx = {}) {
       }
     },
 
-    toolResult({ name, result, rejected }) {
+    toolResult({ name, result, rejected, reason }) {
       if (rejected) {
-        console.log(chalk.dim('  ⨯ skipped\n'));
+        console.log(chalk.dim(reason ? `  ⨯ ${name} blocked: ${reason}\n` : '  ⨯ skipped\n'));
         return;
       }
       if (result.success || result.content || result.entries || result.output) {
@@ -88,7 +88,8 @@ export function createStdoutController(ctx = {}) {
           : result.output
           ? result.output.slice(0, 200)
           : JSON.stringify(result);
-        console.log(chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`));
+        const warn = result.warning ? chalk.yellow('  ▲ saved with a syntax error') : '';
+        console.log(chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`) + warn);
       } else if (result.error) {
         console.log(chalk.red('  ✗ ') + chalk.bold(name) + chalk.dim(` ${result.error}`));
       }
@@ -121,9 +122,22 @@ export function createStdoutController(ctx = {}) {
       printWordmark();
     },
 
-    async requestApproval({ verb, target, hex, note, danger, diff, message, initialValue }) {
+    async requestApproval({ verb, target, hex, note, danger, diff, message, initialValue, allowAlways }) {
       printActionRequest({ verb, target, hex, note, danger });
       if (diff) console.log(diff);
+      if (allowAlways && !danger) {
+        const choice = await p.select({
+          message,
+          initialValue: initialValue ? 'yes' : 'no',
+          options: [
+            { value: 'yes', label: 'Yes' },
+            { value: 'always', label: 'Yes, and don\'t ask again this session' },
+            { value: 'no', label: 'No' },
+          ],
+        });
+        if (p.isCancel(choice)) return false;
+        return choice === 'always' ? 'always' : choice === 'yes';
+      }
       const ok = await p.confirm({ message, initialValue });
       if (p.isCancel(ok)) return false;
       return ok;
@@ -144,6 +158,8 @@ export function createStdoutController(ctx = {}) {
     async suspend(fn) {
       return await fn();
     },
+
+    cancelPending() {},
   };
 
   return ui;
