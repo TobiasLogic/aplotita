@@ -6,7 +6,7 @@ import { isDangerousCommand } from './executor.js';
 import { diffForLineEdit, unifiedDiff } from './diff.js';
 import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { getMcpToolDefinitions, isMcpTool, executeMcpTool } from './mcp.js';
-import { buildContextOutput, extractShBlocks } from './render.js';
+import { buildContextOutput } from './render.js';
 import {
   accumulateToolCalls, assistantMessageWithToolCalls, truncateMessagesOnError,
   runAgentLoop, executeToolCalls,
@@ -247,7 +247,12 @@ export function createSession(ctx) {
       ctx.stats.tokenUsage.total += turnUsage.totalTokens;
       ctx.lastPromptTokens = turnUsage.promptTokens;
       ctx.lastPromptLen = sentLen;
-      ui.usage({ prompt: turnUsage.promptTokens, completion: turnUsage.completionTokens, total: turnUsage.totalTokens });
+      if (ctx.turnTokens) {
+        ctx.turnTokens.prompt += turnUsage.promptTokens;
+        ctx.turnTokens.completion += turnUsage.completionTokens;
+        ctx.turnTokens.total += turnUsage.totalTokens;
+        ctx.turnTokens.rounds++;
+      }
     }
 
     if (fullResponse.trim()) {
@@ -271,7 +276,7 @@ export function createSession(ctx) {
         executeTool,
         signal,
         onResult: (m) => ctx.messages.push(m),
-        onLog: ({ name, result, rejected, reason }) => ui.toolResult({ name, result, rejected, reason }),
+        onLog: (entry) => ui.toolResult(entry),
       });
 
       saveHistory(ctx.messages);
@@ -280,24 +285,8 @@ export function createSession(ctx) {
       return 'continue';
     }
 
-    let executedSh = false;
-    if (ctx.mode === 'build' && canPrompt()) {
-      for (const cmd of extractShBlocks(fullResponse)) {
-        if (signal?.aborted) break;
-        const ok = await confirmRun(cmd, { alwaysAsk: true });
-        if (ok !== true) {
-          ui.log('dim', '  Skipped.\n');
-          continue;
-        }
-        await runShell(cmd, { fromUser: false, signal });
-        executedSh = true;
-      }
-    }
-
     await runCompaction({ force: false });
     saveHistory(ctx.messages);
-
-    if (executedSh && !signal?.aborted) return 'continue';
   }
 
   async function refreshRetrieval() {
@@ -391,6 +380,7 @@ export function createSession(ctx) {
     ctx.turnController = controller;
     ctx.turnAnchor = truncateOnError;
     ctx.lastTurnFailed = false;
+    ctx.turnTokens = { prompt: 0, completion: 0, total: 0, rounds: 0 };
     ctx.isBusy = true;
     const onSigint = () => interrupt();
     process.on('SIGINT', onSigint);
@@ -406,6 +396,8 @@ export function createSession(ctx) {
       return status;
     } finally {
       process.removeListener('SIGINT', onSigint);
+      if (ctx.turnTokens?.rounds > 0) ui.usage(ctx.turnTokens);
+      ctx.turnTokens = null;
       ctx.turnController = null;
       ctx.turnAnchor = null;
       ctx.isBusy = false;

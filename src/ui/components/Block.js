@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { html } from '../html.js';
 import {
   renderMarkdownToString, renderGradientSeparator, formatHelp,
-  buildCommandOutput, inlineWordmark,
+  buildCommandOutput, inlineWordmark, formatToolLine, formatUsage,
 } from '../../render.js';
 
 const LOG_STYLE = {
@@ -17,21 +17,6 @@ const LOG_STYLE = {
   diag: (t) => chalk.dim(`  ${t}`),
   dim: (t) => chalk.dim(t),
 };
-
-function toolLine({ name, result = {}, rejected, reason }) {
-  if (rejected) return chalk.dim(reason ? `  ⨯ ${name} blocked: ${reason}` : '  ⨯ skipped');
-  if (result.success || result.content || result.entries || result.output) {
-    const summary = result.content
-      ? result.content.slice(0, 200)
-      : result.entries ? String(result.entries).slice(0, 200)
-      : result.output ? String(result.output).slice(0, 200)
-      : '';
-    const warn = result.warning ? chalk.yellow('  ▲ saved with a syntax error') : '';
-    return chalk.green('  ✔ ') + chalk.bold(name) + chalk.dim(` ${summary.slice(0, 80)}`) + warn;
-  }
-  if (result.error) return chalk.red('  ✗ ') + chalk.bold(name) + chalk.dim(` ${result.error}`);
-  return chalk.green('  ✔ ') + chalk.bold(name);
-}
 
 function bannerLines(opts = {}) {
   return [
@@ -71,13 +56,13 @@ export function Block({ block }) {
     }
 
     case 'usage':
-      return html`<${Box}><${Text}>${chalk.dim(`  ${block.prompt} prompt · ${block.completion} completion · ${block.total} total tokens`)}</${Text}></${Box}>`;
+      return html`<${Box}><${Text}>${chalk.dim(formatUsage(block))}</${Text}></${Box}>`;
 
     case 'separator':
       return html`<${Box}><${Text}>${chalk.dim(renderGradientSeparator())}</${Text}></${Box}>`;
 
     case 'tool':
-      return html`<${Box}><${Text}>${toolLine(block)}</${Text}></${Box}>`;
+      return html`<${Box}><${Text}>${formatToolLine(block)}</${Text}></${Box}>`;
 
     case 'shell':
       return html`<${Box} flexDirection="column">

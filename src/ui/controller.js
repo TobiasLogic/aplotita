@@ -79,8 +79,8 @@ export function createInkController() {
       set(R.setStatus(state, label));
     },
 
-    toolResult({ name, result, rejected, reason }) {
-      add({ type: 'tool', name, result, rejected: !!rejected, reason });
+    toolResult({ name, args, result, rejected, reason }) {
+      add({ type: 'tool', name, args, result, rejected: !!rejected, reason });
     },
 
     shellStart(cmd) {

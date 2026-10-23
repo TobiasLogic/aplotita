@@ -117,7 +117,7 @@ describe('executeToolCalls', () => {
     await executeToolCalls([{ id: '1', function: { name: 'write_file', arguments: '{}' } }], d);
     expect(d.executeTool).not.toHaveBeenCalled();
     expect(JSON.parse(d.results[0].content)).toEqual({ error: 'User rejected this action' });
-    expect(d.onLog).toHaveBeenCalledWith({ name: 'write_file', rejected: true });
+    expect(d.onLog).toHaveBeenCalledWith({ name: 'write_file', args: {}, rejected: true });
   });
 
   it('runs a local tool and pushes its result', async () => {
@@ -151,7 +151,7 @@ describe('executeToolCalls', () => {
     const d = deps({ confirm: vi.fn().mockResolvedValue('not available in ask mode') });
     await executeToolCalls([{ id: '1', function: { name: 'write_file', arguments: '{}' } }], d);
     expect(JSON.parse(d.results[0].content)).toEqual({ error: 'not available in ask mode' });
-    expect(d.onLog).toHaveBeenCalledWith({ name: 'write_file', rejected: true, reason: 'not available in ask mode' });
+    expect(d.onLog).toHaveBeenCalledWith({ name: 'write_file', args: {}, rejected: true, reason: 'not available in ask mode' });
   });
 
   it('treats empty arguments as an empty object', async () => {
