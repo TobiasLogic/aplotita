@@ -23,7 +23,7 @@ export function findProjectConfig() {
   return findProjectFile([...INSTRUCTION_FILES, ...SETTINGS_FILES]);
 }
 
-const SHELL_HINT = `To run a command, call the run_shell tool. If you only want to suggest a command for the user to run themselves, put it in a triple-backtick block tagged "sh" and they will be offered to run it.`;
+const SHELL_HINT = `To run a command, call the run_shell tool. Code blocks in your replies are only displayed to the user and never executed, so use them freely for examples and instructions.`;
 
 export function getSystemPrompt(mode = 'build') {
   let modePrompt = '';

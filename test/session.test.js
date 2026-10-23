@@ -222,5 +222,39 @@ describe('approvals and modes', () => {
     expect(status).toBe('limit');
     expect(logs.some(([, t]) => /Stopped after 2 tool rounds/.test(t))).toBe(true);
   });
+
+  it('never runs code blocks from an answer, even with shell commands always allowed', async () => {
+    const sentinel = `/tmp/aplotita_shblock_${process.pid}`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(textTurn('Usage:\n\n```sh\ntouch ' + sentinel + '\n```\n')));
+    const ui = fakeUi(true);
+    const ctx = interactiveCtx(ui);
+    ctx.alwaysAllow.add('shell');
+    ctx.messages.push({ role: 'user', content: 'how do I use it' });
+    const status = await ctx.agentLoop({ truncateOnError: 1 });
+    expect(status).toBe('done');
+    expect(ui.calls).toHaveLength(0);
+    const { existsSync } = await import('fs');
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
+  it('reports token usage once per turn', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(streamResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'git_status', arguments: '{}' } }] } }] })}`,
+        'data: {"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}',
+        'data: [DONE]',
+      ]))
+      .mockResolvedValueOnce(streamResponse([
+        'data: {"choices":[{"delta":{"content":"ok"}}]}',
+        'data: {"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}}',
+        'data: [DONE]',
+      ])));
+    const usage = [];
+    const ui = { ...fakeUi(true), usage: (u) => usage.push({ ...u }) };
+    const ctx = interactiveCtx(ui);
+    ctx.messages.push({ role: 'user', content: 'status?' });
+    await ctx.agentLoop({ truncateOnError: 1 });
+    expect(usage).toEqual([{ prompt: 30, completion: 5, total: 35, rounds: 2 }]);
+  });
 });
 

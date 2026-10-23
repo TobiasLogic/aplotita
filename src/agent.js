@@ -61,7 +61,7 @@ export async function executeToolCalls(toolCalls, { confirm, isMcpTool, executeM
     if (decision !== true) {
       const error = typeof decision === 'string' ? decision : 'User rejected this action';
       onResult(toolMessage(tc.id, { error }));
-      if (onLog) onLog({ name: tc.function.name, rejected: true, reason: typeof decision === 'string' ? decision : undefined });
+      if (onLog) onLog({ name: tc.function.name, args, rejected: true, reason: typeof decision === 'string' ? decision : undefined });
       continue;
     }
 
@@ -70,6 +70,6 @@ export async function executeToolCalls(toolCalls, { confirm, isMcpTool, executeM
       : await executeTool(tc.function.name, args, { signal });
 
     onResult(toolMessage(tc.id, result));
-    if (onLog) onLog({ name: tc.function.name, result });
+    if (onLog) onLog({ name: tc.function.name, args, result });
   }
 }
