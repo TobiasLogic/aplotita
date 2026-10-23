@@ -46,6 +46,17 @@ describe('truncateMessagesOnError', () => {
     expect(messages).toHaveLength(1);
   });
 
+  it('keeps the turn when tools already ran, so the model remembers changes on disk', () => {
+    const messages = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'u' },
+      { role: 'assistant', content: null, tool_calls: [{ id: '1' }] },
+      { role: 'tool', tool_call_id: '1', content: '{}' },
+    ];
+    truncateMessagesOnError(messages, 1);
+    expect(messages).toHaveLength(4);
+  });
+
   it('is a no-op when the index is null', () => {
     const messages = [{ a: 1 }, { a: 2 }];
     truncateMessagesOnError(messages, null);
@@ -65,8 +76,16 @@ describe('runAgentLoop', () => {
 
   it('never exceeds maxLoops even if the step keeps continuing', async () => {
     const step = vi.fn().mockResolvedValue('continue');
-    await runAgentLoop(step, 4);
+    expect(await runAgentLoop(step, 4)).toBe('limit');
     expect(step).toHaveBeenCalledTimes(4);
+  });
+
+  it('reports done and aborted outcomes', async () => {
+    expect(await runAgentLoop(vi.fn().mockResolvedValue(undefined), 4)).toBe('done');
+    const controller = new AbortController();
+    const step = vi.fn(async () => { controller.abort(); return 'continue'; });
+    expect(await runAgentLoop(step, 4, controller.signal)).toBe('aborted');
+    expect(step).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -104,7 +123,7 @@ describe('executeToolCalls', () => {
   it('runs a local tool and pushes its result', async () => {
     const d = deps();
     await executeToolCalls([{ id: '1', function: { name: 'list_dir', arguments: '{}' } }], d);
-    expect(d.executeTool).toHaveBeenCalledWith('list_dir', {});
+    expect(d.executeTool).toHaveBeenCalledWith('list_dir', {}, expect.anything());
     expect(d.executeMcpTool).not.toHaveBeenCalled();
     expect(JSON.parse(d.results[0].content)).toEqual({ success: true, from: 'local' });
     expect(d.results[0].tool_call_id).toBe('1');
@@ -126,5 +145,31 @@ describe('executeToolCalls', () => {
     ], d);
     expect(d.results.map((r) => r.tool_call_id)).toEqual(['a', 'b']);
     expect(JSON.parse(d.results[1].content)).toEqual({ error: 'Invalid arguments' });
+  });
+
+  it('passes a denial reason through to the model', async () => {
+    const d = deps({ confirm: vi.fn().mockResolvedValue('not available in ask mode') });
+    await executeToolCalls([{ id: '1', function: { name: 'write_file', arguments: '{}' } }], d);
+    expect(JSON.parse(d.results[0].content)).toEqual({ error: 'not available in ask mode' });
+    expect(d.onLog).toHaveBeenCalledWith({ name: 'write_file', rejected: true, reason: 'not available in ask mode' });
+  });
+
+  it('treats empty arguments as an empty object', async () => {
+    const d = deps();
+    await executeToolCalls([{ id: '1', function: { name: 'git_status', arguments: '' } }], d);
+    expect(d.executeTool).toHaveBeenCalledWith('git_status', {}, expect.anything());
+  });
+
+  it('answers every remaining call when interrupted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const d = deps({ signal: controller.signal });
+    await executeToolCalls([
+      { id: 'a', function: { name: 'list_dir', arguments: '{}' } },
+      { id: 'b', function: { name: 'list_dir', arguments: '{}' } },
+    ], d);
+    expect(d.executeTool).not.toHaveBeenCalled();
+    expect(d.results.map((r) => r.tool_call_id)).toEqual(['a', 'b']);
+    expect(JSON.parse(d.results[0].content).error).toMatch(/Interrupted/);
   });
 });

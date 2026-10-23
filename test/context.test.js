@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveMentions, isVisionCapableModel } from '../src/context.js';
@@ -23,12 +23,45 @@ describe('context.js', () => {
   it('should resolve @file mentions', () => {
     const result = resolveMentions('Look at @package.json');
     expect(result.context).toContain('aplotita');
+    expect(result.text).toBe('Look at package.json');
+  });
+
+  it('leaves npm scopes and email addresses alone', () => {
+    const input = 'add @types/node to devDependencies, ping me at me@example.com';
+    const result = resolveMentions(input);
+    expect(result.text).toBe(input);
+    expect(result.context).toBe('');
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('tolerates trailing punctuation after a mention', () => {
+    const dir = fixture({ 'notes.md': 'NOTES_BODY' });
+    const result = resolveMentions('read @notes.md, then summarize', { cwd: dir });
+    expect(result.context).toContain('NOTES_BODY');
+    expect(result.text).toBe('read notes.md, then summarize');
+  });
+
+  it('warns about a mention that looks like a mistyped path and keeps it as text', () => {
+    const dir = fixture({ 'a.txt': 'x' });
+    mkdirSync(join(dir, 'src'));
+    const result = resolveMentions('fix @src/missing.js', { cwd: dir });
+    expect(result.text).toBe('fix @src/missing.js');
+    expect(result.warnings[0]).toMatch(/Nothing matches @src\/missing\.js/);
+  });
+
+  it('attaches a listing when a directory is mentioned', () => {
+    const dir = fixture({ 'one.js': '1', 'two.js': '2' });
+    mkdirSync(join(dir, 'lib'));
+    writeFileSync(join(dir, 'lib', 'three.js'), '3');
+    const result = resolveMentions('what is in @lib', { cwd: dir });
+    expect(result.context).toContain('directory listing');
+    expect(result.context).toContain('three.js');
   });
 });
 
 describe('isVisionCapableModel', () => {
   it('recognizes multimodal model families', () => {
-    for (const m of ['openai/gpt-4o', 'gpt-4.1-mini', 'claude-sonnet-4-20250514', 'anthropic/claude-3.5-sonnet', 'gemini-2.5-flash', 'mistralai/pixtral-12b']) {
+    for (const m of ['openai/gpt-4o', 'gpt-4.1-mini', 'claude-sonnet-4-20250514', 'anthropic/claude-3.5-sonnet', 'gemini-2.5-flash', 'mistralai/pixtral-12b', 'claude-opus-5-5', 'openai/gpt-6.1-sol']) {
       expect(isVisionCapableModel(m)).toBe(true);
     }
   });

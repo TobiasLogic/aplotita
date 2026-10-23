@@ -256,14 +256,15 @@ export const COMMANDS = [
   ['/provider', 'Set up provider, API key, and model'],
   ['/model [id]', 'Show or switch the model'],
   ['/models', 'Browse and pick models interactively'],
-  ['/temp [n]', 'Show or set temperature (0-2)'],
-  ['/tokens [n]', 'Show or set max output tokens'],
+  ['/temp [n|default]', 'Show or set temperature (0-2)'],
+  ['/tokens [n|default]', 'Show or set max output tokens'],
   ['/mode [type]', 'Switch role: build, architect, ask'],
   ['/theme', 'Pick an accent color'],
   ['/auto <prompt>', 'Run an autonomous agent loop'],
-  ['/loader [style]', 'Show or set loader animation (braille, dots, arc, pulse, shimmer, ...)'],
+  ['/loader [style]', 'Show or set the spinner (braille, dots, arc, circle, line, ...)'],
   ['/save [file]', 'Export the conversation to a markdown file'],
   ['/retry', 'Regenerate the last response'],
+  ['/allow [reset]', 'Show or clear "always allow" approvals for this session'],
   ['/reset', 'Clear the conversation and start fresh'],
   ['/compact', 'Summarize older history to free up context'],
   ['/resume', 'Reload the previous saved session'],
@@ -273,7 +274,7 @@ export const COMMANDS = [
   ['/clear', 'Clear the screen'],
   ['/animations', 'Preview all animation styles'],
   ['/shimmer', 'Preview the wave bar animation'],
-  ['/exit', 'Quit (or press Ctrl+C)'],
+  ['/exit', 'Quit (or press Ctrl+C when idle)'],
 ];
 
 export function formatHelp() {
@@ -342,7 +343,7 @@ export async function printBanner(opts) {
   console.log('  ' + chalk.dim('the simple terminal AI coding assistant'));
   console.log();
   console.log('  ' + chalk.gray('model  ') + chalk.white(opts.model));
-  console.log('  ' + chalk.gray(`temp ${opts.temperature}   max tokens ${opts.maxTokens}`));
+  console.log('  ' + chalk.gray(`temp ${opts.temperature ?? 'default'}   max tokens ${opts.maxTokens ?? 'default'}`));
   console.log('  ' + chalk.gray('type ') + chalk.hex('#36D0D0')('/help') + chalk.gray(' for commands · Ctrl+C to exit'));
   console.log();
 }

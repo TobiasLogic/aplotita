@@ -2,7 +2,7 @@ import chalk from 'chalk';
 
 const BLOCKS = ['▃', '▄', '▅', '▆', '▇', '█'];
 
-const SPINNER_SETS = {
+export const SPINNER_SETS = {
   dots:    ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   arc:     ['◜', '◠', '◝', '◞', '◡', '◟'],
   bounce:  ['⎺', '⎻', '⎼', '⎽', '⎼', '⎻'],

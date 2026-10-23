@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { VexraIndexer } from '../src/indexer/index.js';
+import { CodeIndexer } from '../src/indexer/index.js';
 import { IndexDB } from '../src/indexer/db.js';
 import { detectLang, extractSymbols } from '../src/indexer/languages.js';
 import { createEmbedder } from '../src/indexer/embed.js';
@@ -59,7 +59,7 @@ function fixture(files) {
   return dir;
 }
 function makeIndexer(dir, embedder = fakeEmbedder(16)) {
-  return new VexraIndexer({ root: dir, cfg: TEST_CFG, dbPath: ':memory:', embedder }).init();
+  return new CodeIndexer({ root: dir, cfg: TEST_CFG, dbPath: ':memory:', embedder }).init();
 }
 
 afterEach(() => {
@@ -147,7 +147,7 @@ describe('IndexDB', () => {
   });
 });
 
-describe('VexraIndexer', () => {
+describe('CodeIndexer', () => {
   it('indexes a tree, embeds chunks, and skips ignored dirs', async () => {
     const dir = fixture({
       'foo.js': 'function uniqueWidgetIdentifier() {\n  return 42;\n}\n',
