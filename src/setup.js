@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import chalk from 'chalk';
 import { saveConfig } from './config.js';
-import { fetchModels } from './models.js';
+import { fetchModels, modelOptions } from './models.js';
 import { getProvider, getProviderChoices } from './providers.js';
 import { createSpinner, typewriter } from './shimmer.js';
 
@@ -44,10 +44,10 @@ export async function runProviderSetup(opts) {
   }
 
   const apiKey = await p.password({
-    message: `Enter your ${provider.name} API key`,
+    message: provider.keyOptional ? `Enter your ${provider.name} API key (optional)` : `Enter your ${provider.name} API key`,
     placeholder: provider.keyHint,
     validate: (v) => {
-      if (!v.trim()) return 'API key is required';
+      if (!v.trim()) return provider.keyOptional ? undefined : 'API key is required';
       if (provider.keyPrefix && !v.trim().startsWith(provider.keyPrefix)) {
         return `Key should start with "${provider.keyPrefix}"`;
       }
@@ -58,8 +58,9 @@ export async function runProviderSetup(opts) {
     process.exit(0);
   }
 
-  opts.apiKey = apiKey.trim();
+  opts.apiKey = (apiKey || '').trim();
   opts.baseUrl = baseUrl;
+  opts.provider = providerId;
 
   const spinner = createSpinner('Fetching models...', { style: 'dots', color: [54, 208, 208] });
   spinner.start();
@@ -74,15 +75,25 @@ export async function runProviderSetup(opts) {
   }
 
   if (models.length > 0) {
-    const choices = models.slice(0, 50).map(m => ({
-      value: m.id,
-      label: m.id,
-      hint: m.contextLength ? `${(m.contextLength / 1000).toFixed(0)}k ctx` : '',
-    }));
+    let choices = modelOptions(models);
+    if (choices.length > 30) {
+      const query = await p.text({
+        message: `${choices.length} models available. Type part of a name to narrow the list (Enter to show all)`,
+        placeholder: 'e.g. claude, gpt, qwen',
+      });
+      if (!p.isCancel(query) && query && query.trim()) {
+        const terms = query.trim().toLowerCase().split(/\s+/);
+        const narrowed = choices.filter((c) => terms.every((t) => c.value.toLowerCase().includes(t)));
+        if (narrowed.length > 0) choices = narrowed;
+        else p.log.warn('Nothing matched; showing every model.');
+      }
+    }
 
     const selected = await p.select({
       message: 'Pick a model',
       options: choices,
+      maxItems: 12,
+      initialValue: choices.some((c) => c.value === provider.defaultModel) ? provider.defaultModel : undefined,
     });
     if (p.isCancel(selected)) {
       model = provider.defaultModel || models[0].id;

@@ -237,6 +237,28 @@ describe('streamChat request building', () => {
     });
   });
 
+  it('leaves temperature and max tokens to the provider unless they are set', async () => {
+    const calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'hi' }], { apiKey: 'k', baseUrl: 'https://api.test/v1', model: 'm1' }));
+    expect(calls[0].body).not.toHaveProperty('temperature');
+    expect(calls[0].body).not.toHaveProperty('max_tokens');
+  });
+
+  it('uses max_completion_tokens for OpenAI and a default cap for Anthropic', async () => {
+    const calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'hi' }], { apiKey: 'k', provider: 'openai', baseUrl: 'https://api.openai.com/v1', maxTokens: 500 }));
+    await collect(streamChat([{ role: 'user', content: 'hi' }], { apiKey: 'k', provider: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' }));
+    expect(calls[0].body.max_completion_tokens).toBe(500);
+    expect(calls[0].body).not.toHaveProperty('max_tokens');
+    expect(calls[1].body.max_tokens).toBe(32000);
+  });
+
+  it('omits the Authorization header when there is no key', async () => {
+    const calls = captureFetch();
+    await collect(streamChat([{ role: 'user', content: 'hi' }], { provider: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3' }));
+    expect(calls[0].options.headers).not.toHaveProperty('Authorization');
+  });
+
   const conversation = () => ([
     { role: 'system', content: 'sys' },
     { role: 'user', content: 'u1' },
