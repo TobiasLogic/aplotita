@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.1.1 - 2026-10-23
+
+### Fixed
+- **Code blocks in answers are never run.** Commands in ```sh blocks were offered for execution
+  after every answer, and once shell commands were set to "always allow" they ran without a
+  prompt. A usage example like `npm link` in a final summary would install things globally and
+  send the model off on another round. Commands now only run through the `run_shell` tool;
+  code blocks are just shown.
+- The index line at startup said "keyword search" after a restart even when embeddings were
+  stored, because it only counted chunks embedded in that run.
+
+### Changed
+- Tool results show what they acted on and a one-line outcome (`✔ write_file todo.js · 812
+  bytes`, `✔ run_shell $ npm test · ℹ fail 0`), with a yellow mark for non-zero exits. Before,
+  file tools showed nothing and command output spilled over several lines.
+- Markdown tables render as aligned columns instead of raw pipes.
+- Token usage is shown once per turn (`7 requests · 45k in · 5.3k out`) instead of after every
+  request.
+- Removed the unused `src/markdown.js`.
+
 ## 2.1.0 - 2026-10-23
 
 ### Security
